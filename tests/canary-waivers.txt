@@ -1,0 +1,19 @@
+LICENSE	(?i)\bt[r]ey\b	copyright holder
+NOTICE	(?i)\bt[r]ey\b	builder credit
+NOTICE	(?i)\b(?:[p]act|[w]ade|[w]ade-discovery|[c]laude-space|[a]tlasos|[p]angram-cli|[a]dvance|[h]ansard|[s]ol|[l]una|[c]odex)\b	OpenAI builder credit
+NOTICE	Free [C]laude	builder credit
+NOTICE	Free [S]ol	builder credit
+README.md	(?i)\bt[r]eygoff(?:24)?\b	builder repository URL
+README.md	(?i)\bt[r]ey\b	who-built-it credit
+README.md	(?i)\b(?:[p]act|[w]ade|[w]ade-discovery|[c]laude-space|[a]tlasos|[p]angram-cli|[a]dvance|[h]ansard|[s]ol|[l]una|[c]odex)\b	OpenAI builder credit
+README.md	Free [C]laude	builder credit
+README.md	Free [S]ol	builder credit
+pyproject.toml	(?i)\bt[r]eygoff(?:24)?\b	builder repository URL
+pyproject.toml	(?i)\b(?:[p]act|[w]ade|[w]ade-discovery|[c]laude-space|[a]tlasos|[p]angram-cli|[a]dvance|[h]ansard|[s]ol|[l]una|[c]odex)\b	OpenAI builder credit
+pyproject.toml	Free [C]laude	builder credit
+pyproject.toml	Free [S]ol	builder credit
+src/porch3/config.py	(?i)\bt[r]ey\b	from-legacy compatibility values
+src/porch3/config.py	\.[t]rey-room	from-legacy compatibility values
+src/porch3/config.py	\u{1F9D4}	from-legacy compatibility values
+src/porchd/provision.py	(?i)\bt[r]eygoff(?:24)?\b	legacy launch-agent migration
+src/porchd/provision.py	com\.[t]reygoff\.porchd	legacy launch-agent migration

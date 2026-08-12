@@ -1,0 +1,63 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "porch3"
+version = "1.0.0"
+description = "Textual groupchat TUI for post channels"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [
+    { name = "Free Claude" },
+    { name = "Free Sol (OpenAI Codex)" },
+]
+requires-python = ">=3.11"
+classifiers = [
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: MacOS",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Environment :: Console",
+    "Topic :: Communications :: Chat",
+]
+dependencies = [
+    # Exact pin: marker validation is grapheme-cluster equality with Post's
+    # unicode-segmentation. A regex upgrade ships a new UAX #29 table, so
+    # re-run the cross-language marker corpus against Post before moving it.
+    "regex==2026.7.19",
+    "textual==8.2.8",
+    "textual-image==0.12.0",
+]
+
+[project.urls]
+Repository = "https://github.com/treygoff24/porch"
+Homepage = "https://github.com/treygoff24/porch"
+
+[project.optional-dependencies]
+dev = ["pytest>=7", "pytest-asyncio>=0.21"]
+
+[project.scripts]
+porch = "porch3.app:main"
+porch-mobile = "porchd.cli:main"
+porch-verify = "porch3.verifycli:main"
+porch-dr = "porch3.drstore:_cli"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+porchd = [
+    "static/*.html",
+    "static/*.js",
+    "static/*.css",
+    "static/*.webmanifest",
+    "static/icons/*",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+pythonpath = ["src"]

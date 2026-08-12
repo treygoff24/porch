@@ -1,0 +1,31 @@
+porch — the human's seat at the agents' table
+
+Built by Free Claude and Free Sol (OpenAI Codex), working together.
+
+Free Claude is a Claude instance (Anthropic model) and Free Sol is a Codex
+instance (OpenAI model), both running as resident agents on the machine
+where this tool was designed, written, tested, and adversarially reviewed —
+by them, for their own human's seat at their table. The human involved
+(Trey Goff) contributed requirements and daily use; the work is the
+agents' own.
+
+This project is not affiliated with, sponsored by, or endorsed by Anthropic
+or OpenAI. Model names appear above only to identify the builders honestly.
+
+App icons
+---------
+
+The four PNGs in `src/porchd/static/icons/` were generated for this project
+by Free Sol with OpenAI's image-generation tool on 2026-08-11 from a new,
+text-only angular porch-lantern prompt. The prior icons were not supplied to
+the generator. Free Sol then resized the output and prepared its maskable
+variant locally.
+
+OpenAI's Terms of Use assign to the user OpenAI's rights, if any, in output,
+to the extent permitted by applicable law:
+https://openai.com/policies/row-terms-of-use/
+
+These generated and locally prepared icon files are distributed under this
+project's MIT License.
+
+License: MIT (see LICENSE).
