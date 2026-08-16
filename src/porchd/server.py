@@ -18,13 +18,25 @@ from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
 from porch3.constants import IMAGE_MAX_BYTES
+from porch3.signature_v2 import MAX_SIGNED_BODY_BYTES
 from porchd import devices, imagesvc
 from porchd.service import ApiError, Service
 
 COOKIE_NAME = "__Host-porchd"
 CSRF_HEADER = "X-Porch-CSRF"
 MAX_JSON_BODY = 64 * 1024
+# A C0 byte can occupy six JSON bytes ("\\u0000"). Keep a small envelope
+# allowance while leaving the signed body's 1 MiB UTF-8 cap as the protocol
+# boundary enforced after JSON decoding.
+MAX_SEND_JSON_BODY = 6 * MAX_SIGNED_BODY_BYTES + MAX_JSON_BODY
 MAX_UPLOAD_BODY = IMAGE_MAX_BYTES + 4096
+# Unread bodies at or under this are drained so HTTP/1.1 keep-alive can
+# continue after a rejection; larger leftovers force Connection: close.
+BODY_DRAIN_CAP = MAX_JSON_BODY
+# Total wall-clock budget for draining a rejected request's body. The socket
+# timeout is per-read, so without this a drip-feeding client could hold a
+# worker slot indefinitely while we "drain".
+DRAIN_TOTAL_DEADLINE_S = 3.0
 REQUEST_TIMEOUT_S = 20.0
 # Simultaneous connections. One phone polling three endpoints needs a
 # handful; the rest of the ceiling is headroom, not capacity planning.
@@ -167,18 +179,148 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):  # keep the daemon quiet
         pass
 
+    def handle_one_request(self):
+        self._body_fully_read = False
+        self._body_read_attempted = False
+        super().handle_one_request()
+
     def _send(self, status: int, body: bytes, content_type: str, *, extra: dict | None = None):
+        extra = dict(extra or {})
+        self._consume_unread_body(extra)
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Content-Security-Policy", CSP)
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Referrer-Policy", "no-referrer")
-        for key, value in (extra or {}).items():
+        for key, value in extra.items():
             self.send_header(key, value)
         self.end_headers()
         if self.command != "HEAD":
             self.wfile.write(body)
+
+    def _force_close(self, extra: dict) -> None:
+        extra["Connection"] = "close"
+        self.close_connection = True
+
+    def _declared_length(self) -> int | None:
+        """The request's Content-Length: None if absent, -1 if malformed.
+
+        Strict on purpose: exactly one distinct value, ASCII digits only.
+        `int()` is too permissive ("-0", "+4", "5_0", unicode digits), and
+        conflicting duplicate headers mean the drain length cannot be
+        trusted — either slip lets leftover bytes poison keep-alive.
+        """
+        values = self.headers.get_all("Content-Length") or []
+        if not values:
+            return None
+        stripped = {value.strip(" \t") for value in values}  # HTTP OWS only
+        if len(stripped) != 1:
+            return -1
+        value = next(iter(stripped))
+        if not (value.isascii() and value.isdigit()):
+            return -1
+        if len(value) > 20:
+            # Longer than any real length — and int() itself raises past
+            # ~4300 digits (CPython integer-conversion limit), which would
+            # escape as a 500 loop instead of a refusal.
+            return -1
+        return int(value)
+
+    def _drain_body(self, length: int) -> bool:
+        deadline = time.monotonic() + DRAIN_TOTAL_DEADLINE_S
+        try:
+            remaining = length
+            while remaining:
+                budget = deadline - time.monotonic()
+                if budget <= 0:
+                    return False
+                self.connection.settimeout(min(budget, self.timeout))
+                # read1: at most one raw recv per call, so the deadline is
+                # re-checked between every network read. Buffered read(n)
+                # keeps recv-ing until it has n bytes, each recv on its own
+                # timeout — a drip sender could pin it past any deadline.
+                chunk = self.rfile.read1(min(remaining, 4096))
+                if not chunk:
+                    return False
+                remaining -= len(chunk)
+            return True
+        except Exception:
+            return False
+        finally:
+            try:
+                self.connection.settimeout(self.timeout)
+            except OSError:
+                pass
+
+    def _discard_buffered_body(self) -> None:
+        """Eat bytes already in the socket so close is a FIN, not an RST."""
+        try:
+            self.connection.settimeout(0.0)
+            for _ in range(32):
+                if not self.rfile.read(4096):
+                    break
+        except Exception:
+            pass
+        finally:
+            try:
+                self.connection.settimeout(self.timeout)
+            except OSError:
+                pass
+
+    def _consume_unread_body(self, extra: dict) -> None:
+        """Drain a modest leftover body, or close so it cannot poison keep-alive.
+
+        A rejection that never reads the request body leaves those bytes on
+        the socket. BaseHTTPRequestHandler then parses them as the next
+        request line (method `'{"through_id":...}GET'` → 501). Tailscale
+        Serve reuses one backend connection, so one poisoned parse takes
+        the whole porch down. Mirror PorchdServer._refuse_overload: drain
+        what we can bound, otherwise hang up.
+        """
+        if getattr(self, "_body_fully_read", False):
+            return
+        if getattr(self, "_body_read_attempted", False):
+            self._force_close(extra)
+            return
+        if self.close_connection:
+            # Already closing (e.g. the client sent Connection: close): never
+            # block waiting for more bytes on a dying connection — that hands
+            # a slow sender a worker slot for nothing. Best-effort discard of
+            # what's buffered, then hang up.
+            self._discard_buffered_body()
+            self._force_close(extra)
+            return
+        if any(
+            "100-continue" in (value or "").lower()
+            for value in self.headers.get_all("Expect") or []
+        ):
+            # The body may not even be in flight yet; draining would wait on
+            # a client that owes us nothing. Hang up instead.
+            self._discard_buffered_body()
+            self._force_close(extra)
+            return
+        if self.headers.get("Transfer-Encoding"):
+            self._discard_buffered_body()
+            self._force_close(extra)
+            return
+        length = self._declared_length()
+        if length is None:
+            return
+        if length < 0:
+            self._discard_buffered_body()
+            self._force_close(extra)
+            return
+        if length == 0:
+            return
+        if length > BODY_DRAIN_CAP:
+            self._discard_buffered_body()
+            self._force_close(extra)
+            return
+        if self._drain_body(length):
+            self._body_fully_read = True
+            return
+        self._force_close(extra)
 
     def _json(self, status: int, payload: dict, *, extra: dict | None = None):
         headers = {"Cache-Control": "no-store", **(extra or {})}
@@ -218,14 +360,9 @@ class Handler(BaseHTTPRequestHandler):
         if self.headers.get("Transfer-Encoding"):
             self._error(411, "length_required", "chunked bodies are not accepted")
             return None
-        raw_length = self.headers.get("Content-Length")
-        if raw_length is None:
+        length = self._declared_length()
+        if length is None:
             self._error(411, "length_required", "Content-Length is required")
-            return None
-        try:
-            length = int(raw_length)
-        except ValueError:
-            self._error(400, "bad_request", "malformed Content-Length")
             return None
         if length < 0:
             self._error(400, "bad_request", "malformed Content-Length")
@@ -234,7 +371,16 @@ class Handler(BaseHTTPRequestHandler):
             # Refused before a single body byte is read (§2).
             self._error(413, "too_large", f"request body over the {cap} byte cap")
             return None
-        return self.rfile.read(length)
+        self._body_read_attempted = True
+        data = self.rfile.read(length)
+        if len(data) != length:
+            # A short body is a truncated request: refuse it here so route
+            # logic can never act on a partial payload that happens to parse.
+            self.close_connection = True
+            self._error(400, "bad_request", "request body was truncated")
+            return None
+        self._body_fully_read = True
+        return data
 
     def _json_body(self, cap: int = MAX_JSON_BODY) -> dict | None:
         raw = self._read_body(cap)
@@ -381,7 +527,7 @@ class Handler(BaseHTTPRequestHandler):
 
         match = re.fullmatch(rf"/api/channels/{CHANNEL_RE}/send", path)
         if match and method == "POST":
-            body = self._json_body()
+            body = self._json_body(MAX_SEND_JSON_BODY)
             if body is None:
                 return
             result = self.service.send(device, match.group("channel"), body)

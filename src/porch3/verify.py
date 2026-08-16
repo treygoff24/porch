@@ -118,10 +118,25 @@ def set_verify_done_callback(cb: Callable[[str, str], None] | None) -> None:
         _VERIFY_DONE_CB = cb
 
 
-def is_signed_msg(msg: dict, *, wire=None) -> bool:
+def is_signed_msg(
+    msg: dict, *, wire=None, owner_room: str | None = None
+) -> bool:
     from porch3.wire import DEFAULT_WIRE
 
     fmt = wire if wire is not None else DEFAULT_WIRE
+    locator_present = bool(
+        msg.get("signature_ref_present", "signature_ref" in msg)
+    )
+    expected_owner = (
+        owner_room
+        if owner_room is not None
+        else getattr(_CONFIG, "owner_room", None)
+    )
+    if locator_present and expected_owner is not None:
+        # Even malformed/null owner locators are candidates so they get a loud
+        # negative badge instead of disappearing as unsigned. A non-owner
+        # locator is inert and must not make copied v1-looking text badgeable.
+        return msg.get("from") == expected_owner
     return fmt.is_signed(msg["body"])
 
 

@@ -7,6 +7,7 @@ import subprocess
 from dataclasses import dataclass, field
 
 from porch3.config import PorchConfig
+from porch3.signature_v2 import POST_DEFAULT_BODY_BYTES, body_bytes
 
 
 # Errors that mean the channel mutation (or signed payload) committed and
@@ -71,27 +72,30 @@ def send_as_owner(
     config: PorchConfig,
     raw: bool = False,
     anyway: bool = False,
+    signature_ref: str | None = None,
 ) -> SendResult:
-    body = text if raw else config.wire.prefix_casual(text)
-    cmd = ["post", "chat", channel, "--send", "--json", "--body", body]
+    body = (
+        text
+        if raw or signature_ref is not None
+        else config.wire.prefix_casual(text)
+    )
+    cmd = ["post", "chat", channel, "--send"]
     if anyway:
-        # --anyway must precede --body for post's argparse; insert after --send
-        cmd = [
-            "post",
-            "chat",
-            channel,
-            "--send",
-            "--anyway",
-            "--json",
-            "--body",
-            body,
-        ]
+        cmd.append("--anyway")
+    if signature_ref is not None:
+        if len(body_bytes(body)) > POST_DEFAULT_BODY_BYTES:
+            cmd.append("--oversize")
+        cmd.extend(["--signature-ref", signature_ref])
+    cmd.extend(["--json", "--body-file", "/dev/stdin"])
     r = subprocess.run(
         cmd,
         cwd=config.owner_room_dir,
         env=config.post_env(),
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="strict",
+        input=body,
     )
     data = _decode_post_json(r.stdout, r.stderr)
     if r.returncode == 0:
@@ -119,6 +123,11 @@ def send_as_owner(
                     "pfp": item.get("pfp"),
                     "re": item.get("re"),
                     "mentions": item.get("mentions") or [],
+                    **(
+                        {"signature_ref": item["signature_ref"]}
+                        if "signature_ref" in item
+                        else {}
+                    ),
                 }
             )
         return SendResult(

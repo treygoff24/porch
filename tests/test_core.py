@@ -293,6 +293,58 @@ class MentionsTest(unittest.TestCase):
 
 
 class StoreParseTest(unittest.TestCase):
+    def test_v2_preserves_body_boundaries_and_raw_locator(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store_dir = Path(tmp) / "commons" / "messages"
+            store_dir.mkdir(parents=True)
+            mid = "20250106-120000-000000-v20001"
+            body = "  leading\r\n\n🦊🔏 bait [signed:FAKE]\ntrailing\t \n"
+            locator = {"version": True, "tag": "malformed_but_raw"}
+            meta = {
+                "id": mid,
+                "from": "mara",
+                "sent": "2025-01-06 12:00:00 -0400",
+                "channel": "commons",
+                "signature_ref": locator,
+            }
+            path = store_dir / f"{mid}.msg"
+            path.write_bytes(
+                json.dumps(meta, separators=(",", ":")).encode()
+                + b"\n---\n"
+                + body.encode()
+            )
+
+            msg = store.parse_msg(path)
+            self.assertIsNotNone(msg)
+            assert msg is not None
+            self.assertEqual(msg["body"], body)
+            self.assertEqual(msg["signature_ref"], locator)
+            self.assertTrue(msg["signature_ref_present"])
+            self.assertEqual(msg["storage_channel"], "commons")
+            self.assertEqual(msg["envelope_channel"], "commons")
+            self.assertEqual(store.clean_message_body(msg), body)
+
+    def test_legacy_store_body_and_cleaning_are_unchanged(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store_dir = Path(tmp) / "commons" / "messages"
+            store_dir.mkdir(parents=True)
+            mid = "20250106-120000-000000-v10001"
+            meta = {
+                "id": mid,
+                "from": "mara",
+                "sent": "2025-01-06 12:00:00 -0400",
+            }
+            path = store_dir / f"{mid}.msg"
+            path.write_text(
+                json.dumps(meta) + "\n---\n  🦊🔏 hello [signed:TAG]  \n"
+            )
+            msg = store.parse_msg(path)
+            self.assertIsNotNone(msg)
+            assert msg is not None
+            self.assertEqual(msg["body"], "🦊🔏 hello [signed:TAG]")
+            self.assertFalse(msg["signature_ref_present"])
+            self.assertEqual(store.clean_message_body(msg), "hello")
+
     def test_array_json_does_not_brick_startup(self):
         """Finding 5: `[]\\n---\\nbody` must skip, not AttributeError."""
         with tempfile.TemporaryDirectory() as tmp:

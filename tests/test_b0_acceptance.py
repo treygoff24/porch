@@ -389,7 +389,7 @@ class TestWireRoundTripNonDefaultMarker:
 
     def test_live_verifier_missing_then_present_reenqueues(self, tmp_path, monkeypatch):
         """Round 8: lookup absence is UNKNOWN — not terminal False in _verdicts."""
-        from porch3.verifycli import EXIT_OK, MessageNotFound
+        from porch3.verifycli import EXIT_LOOKUP, EXIT_OK
         from porchd.ownership import LiveVerifier
 
         cfg = make_porch_config(
@@ -399,21 +399,17 @@ class TestWireRoundTripNonDefaultMarker:
         tag = "20250111T180000Z"
         body = cfg.wire.prefix_signed("⚖️ DR dr-9 accepted", tag)
         msg = {"id": mid, "from": "mara", "body": body}
-        raw = ('{"id":"%s","from":"mara"}\n---\n%s' % (mid, body)).encode()
-
         present = [False]
 
-        def held(mail_root, channel, message_id):
+        def verify(message_id, *, config, channel=None):
             if not present[0]:
-                raise MessageNotFound(f"message id {message_id!r} not found")
-            return raw
+                return EXIT_LOOKUP, f"message id {message_id!r} not found"
+            assert config is cfg
+            assert channel == "commons"
+            return EXIT_OK, "VERIFIED"
 
         monkeypatch.setattr(
-            "porchd.ownership.held_read_channel_message", held
-        )
-        monkeypatch.setattr(
-            "porchd.ownership.verify_body_bytes",
-            lambda body_bytes, *, config, wire=None: (EXIT_OK, "VERIFIED"),
+            "porchd.ownership.verify_message_id", verify
         )
         verifier = LiveVerifier(
             channels_root=cfg.channels_dir,
@@ -594,13 +590,19 @@ class TestConfigTrustSeamThreading:
         monkeypatch.setenv("PORCH_CONFIG", str(path_b))
 
         body_calls: list[object] = []
+        message_calls: list[object] = []
 
         def spy_body(body, *, config, wire=None):
             body_calls.append(config)
             return EXIT_FAIL, "FAIL"
 
         monkeypatch.setattr("porch3.verifycli.verify_body_bytes", spy_body)
-        monkeypatch.setattr("porchd.ownership.verify_body_bytes", spy_body)
+
+        def spy_message(message_id, *, config, channel=None):
+            message_calls.append(config)
+            return EXIT_FAIL, "FAIL"
+
+        monkeypatch.setattr("porchd.ownership.verify_message_id", spy_message)
 
         state = tmp_path / "state"
         state.mkdir()
@@ -627,10 +629,10 @@ class TestConfigTrustSeamThreading:
         assert svc.verifier.config_path == path_a.resolve()
 
         # LiveVerifier must verify under frozen A.
-        body_calls.clear()
+        message_calls.clear()
         svc.verifier.verify_now("commons", mid)
-        assert body_calls, "LiveVerifier did not call verify_body_bytes"
-        for cfg in body_calls:
+        assert message_calls, "LiveVerifier did not call verify_message_id"
+        for cfg in message_calls:
             assert cfg is cfg_a or cfg.owner_room == "alice"
             assert getattr(cfg, "source_path", None) == path_a.resolve()
 

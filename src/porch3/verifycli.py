@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import errno
+import json
 import os
 import re
 import shutil
@@ -20,6 +21,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -32,6 +34,11 @@ from porch3.config import (
     load_config,
 )
 from porch3.platform import require_macos
+from porch3.signature_v2 import (
+    MAX_SIGNED_BODY_BYTES,
+    manifest_bytes,
+    validate_tag,
+)
 from porch3.wire import WireFormat
 
 EXIT_OK = 0
@@ -79,6 +86,25 @@ class MessageNotFound(Exception):
 
 class DuplicateMessage(Exception):
     """Multiple channel message hits for one id — fail closed."""
+
+
+@dataclass(frozen=True)
+class HeldMessage:
+    """One channel message read through a held storage-directory chain.
+
+    ``storage_channel`` comes from the directory opened by the verifier; it is
+    never inferred from the sender-controlled JSON envelope. ``body`` retains
+    every byte after Post's exact envelope separator.
+    """
+
+    storage_channel: str
+    envelope: dict[str, object] | None
+    body: bytes
+    raw: bytes
+
+    @property
+    def signature_ref_present(self) -> bool:
+        return self.envelope is not None and "signature_ref" in self.envelope
 
 
 # Dir-open failures that mean "skip this entry" rather than environment IO.
@@ -158,6 +184,29 @@ def _strip_msg_envelope(raw: bytes) -> bytes:
     if idx < 0:
         return raw
     return raw[idx + len(sep) :]
+
+
+def _held_message(storage_channel: str, raw: bytes) -> HeldMessage:
+    """Parse held bytes without weakening the legacy body-only fallback."""
+    envelope: dict[str, object] | None = None
+    body = _strip_msg_envelope(raw)
+    if raw.startswith(b"{"):
+        sep = b"\n---\n"
+        idx = raw.find(sep)
+        if idx >= 0:
+            try:
+                parsed = json.loads(raw[:idx].decode("utf-8", errors="strict"))
+            except (UnicodeDecodeError, ValueError, TypeError):
+                parsed = None
+            if isinstance(parsed, dict):
+                envelope = parsed
+                body = raw[idx + len(sep) :]
+    return HeldMessage(
+        storage_channel=storage_channel,
+        envelope=envelope,
+        body=body,
+        raw=raw,
+    )
 
 
 def _is_real_dir(path: Path) -> bool:
@@ -303,12 +352,26 @@ def held_read_channel_message(
     return data
 
 
-def held_read_unique_message(
+def held_read_channel_record(
+    mail_root: Path,
+    channel: str,
+    message_id: str,
+    *,
+    limit: int = _MAX_MSG_BYTES,
+) -> HeldMessage:
+    """Return held message bytes together with their actual storage channel."""
+    raw = held_read_channel_message(
+        mail_root, channel, message_id, limit=limit
+    )
+    return _held_message(channel, raw)
+
+
+def held_read_unique_message_record(
     mail_root: Path,
     message_id: str,
     *,
     limit: int = _MAX_MSG_BYTES,
-) -> bytes:
+) -> HeldMessage:
     """Unique global lookup under ``channels/*/messages/<id>.msg`` via held fds.
 
     Only real (non-symlink) channel/messages directories participate. Zero hits
@@ -319,7 +382,7 @@ def held_read_unique_message(
         root_fd = _open_dir_nofollow(mail_root, label="mail_root")
     except FileNotFoundError as exc:
         raise MessageNotFound(f"message id {message_id!r} not found") from exc
-    hits: list[bytes] = []
+    hits: list[HeldMessage] = []
     try:
         try:
             channels_fd = _open_dir_nofollow(
@@ -370,7 +433,7 @@ def held_read_unique_message(
                 finally:
                     os.close(channel_fd)
                 if data is not None:
-                    hits.append(data)
+                    hits.append(_held_message(name, data))
                     if len(hits) > 1:
                         raise DuplicateMessage(
                             f"duplicate message id {message_id!r} ({len(hits)} hits)"
@@ -382,6 +445,18 @@ def held_read_unique_message(
     if not hits:
         raise MessageNotFound(f"message id {message_id!r} not found")
     return hits[0]
+
+
+def held_read_unique_message(
+    mail_root: Path,
+    message_id: str,
+    *,
+    limit: int = _MAX_MSG_BYTES,
+) -> bytes:
+    """Compatibility bytes-only wrapper around the held record lookup."""
+    return held_read_unique_message_record(
+        mail_root, message_id, limit=limit
+    ).raw
 
 
 def _find_message_paths(mail_root: Path, message_id: str) -> list[Path]:
@@ -634,6 +709,145 @@ def verify_body_bytes(
     )
 
 
+def _owner_v2_tag(
+    held: HeldMessage, *, config: PorchConfig
+) -> tuple[bool, str | None, str]:
+    """Select and strictly parse an owner's present v2 locator.
+
+    The first tuple item says whether v2 was selected. A locator on any other
+    sender is inert and therefore leaves legacy v1 body verification intact.
+    """
+    envelope = held.envelope
+    if (
+        envelope is None
+        or envelope.get("from") != config.owner_room
+        or "signature_ref" not in envelope
+    ):
+        return False, None, ""
+    locator = envelope["signature_ref"]
+    if type(locator) is not dict or set(locator) != {"version", "tag"}:
+        return True, None, "malformed signature_ref: want exactly version and tag"
+    if type(locator["version"]) is not int or locator["version"] != 2:
+        return True, None, "malformed signature_ref: version must be integer 2"
+    tag = locator["tag"]
+    try:
+        validate_tag(tag)
+    except (TypeError, ValueError) as exc:
+        return True, None, f"malformed signature_ref: {exc}"
+    return True, tag, ""
+
+
+def _verify_v2_held(
+    held: HeldMessage,
+    *,
+    tag: str,
+    config: PorchConfig,
+) -> tuple[int, str]:
+    """Verify one selected v2 message from its held full-message record."""
+    if config.signing_disabled:
+        return EXIT_FAIL, f"verification disabled: {config.signing_disabled_reason}"
+
+    # This check intentionally precedes UTF-8 decoding, hashing, manifest
+    # construction, and every sidecar read.
+    if len(held.body) > MAX_SIGNED_BODY_BYTES:
+        return (
+            EXIT_FAIL,
+            f"signed v2 body exceeds {MAX_SIGNED_BODY_BYTES} bytes (1 MiB)",
+        )
+
+    envelope = held.envelope
+    if envelope is None:  # selected v2 always has an envelope; defensive typing
+        return EXIT_FAIL, "malformed signature_ref envelope"
+    envelope_channel = envelope.get("channel")
+    if not isinstance(envelope_channel, str):
+        return EXIT_FAIL, "signed v2 envelope channel is missing or not a string"
+    if envelope_channel != held.storage_channel:
+        return (
+            EXIT_FAIL,
+            "signed v2 envelope channel differs from actual storage channel",
+        )
+    try:
+        body_text = held.body.decode("utf-8", errors="strict")
+    except UnicodeDecodeError:
+        return EXIT_FAIL, "invalid UTF-8 body"
+    try:
+        expected_manifest = manifest_bytes(tag, held.storage_channel, body_text)
+    except (TypeError, ValueError) as exc:
+        return EXIT_FAIL, f"cannot construct signed v2 manifest: {exc}"
+
+    payload = config.sigs_dir / f"{tag}.txt"
+    sig = config.sigs_dir / f"{tag}.txt.sig"
+    try:
+        payload_bytes = _read_regular_nofollow(
+            payload, limit=_MAX_PAYLOAD_BYTES, label="payload"
+        )
+    except FileNotFoundError:
+        return EXIT_FAIL, f"missing detached payload at {payload}"
+    except SafeReadError as exc:
+        return EXIT_ENV, str(exc)
+    try:
+        sig_bytes = _read_regular_nofollow(
+            sig, limit=_MAX_SIG_BYTES, label="signature"
+        )
+    except FileNotFoundError:
+        return EXIT_FAIL, f"missing detached signature at {sig}"
+    except SafeReadError as exc:
+        return EXIT_ENV, str(exc)
+
+    if payload_bytes != expected_manifest:
+        return EXIT_FAIL, "signed v2 manifest differs from held message"
+
+    signers = config.allowed_signers
+    try:
+        signers_bytes = _read_regular_nofollow(
+            signers, limit=_MAX_SIGNERS_BYTES, label="allowed_signers"
+        )
+    except FileNotFoundError:
+        return EXIT_FAIL, f"no allowed_signers at {signers}"
+    except SafeReadError as exc:
+        return EXIT_ENV, str(exc)
+
+    code, detail = _ssh_verify(
+        payload_bytes=payload_bytes,
+        sig_bytes=sig_bytes,
+        signers_bytes=signers_bytes,
+        principal=config.principal,
+        namespace=config.signing_namespace,
+    )
+    if code != EXIT_OK:
+        stage = "ssh-keygen" if code == EXIT_ENV else "signature"
+        return code, f"{stage}: {detail}"
+    age = _age_string(tag)
+    return (
+        EXIT_OK,
+        f"VERIFIED: {config.verified_render()} — signed {tag} ({age})",
+    )
+
+
+def verify_held_message(
+    held: HeldMessage,
+    *,
+    config: PorchConfig,
+    wire: WireFormat | None = None,
+) -> tuple[int, str]:
+    """Verify a full held message, selecting v2 only from owner metadata."""
+    envelope_sender = (
+        held.envelope.get("from") if held.envelope is not None else None
+    )
+    if (
+        isinstance(envelope_sender, str)
+        and envelope_sender != config.owner_room
+    ):
+        return EXIT_FAIL, "message sender is not the configured owner"
+    selected, tag, error = _owner_v2_tag(held, config=config)
+    if selected:
+        if error:
+            return EXIT_FAIL, error
+        assert tag is not None
+        return _verify_v2_held(held, tag=tag, config=config)
+    return verify_body_bytes(held.body, config=config, wire=wire)
+
+
 def _resolve_channel_message_path(
     config: PorchConfig, channel: str, message_id: str
 ) -> tuple[list[Path], str | None]:
@@ -709,7 +923,7 @@ def verify_message_id(
         if env_err:
             return EXIT_ENV, env_err
         try:
-            raw = held_read_channel_message(
+            held = held_read_channel_record(
                 config.mail_root, channel, message_id, limit=_MAX_MSG_BYTES
             )
         except MessageNotFound:
@@ -722,7 +936,7 @@ def verify_message_id(
             return EXIT_LOOKUP, f"message id {message_id!r} not found"
     else:
         try:
-            raw = held_read_unique_message(
+            held = held_read_unique_message_record(
                 config.mail_root, message_id, limit=_MAX_MSG_BYTES
             )
         except MessageNotFound:
@@ -735,8 +949,7 @@ def verify_message_id(
             return EXIT_ENV, str(exc)
         except FileNotFoundError:
             return EXIT_LOOKUP, f"message id {message_id!r} not found"
-    body = _strip_msg_envelope(raw)
-    return verify_body_bytes(body, config=config)
+    return verify_held_message(held, config=config)
 
 
 def build_parser() -> argparse.ArgumentParser:

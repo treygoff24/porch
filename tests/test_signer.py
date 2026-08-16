@@ -1,7 +1,8 @@
-"""Sidecar creation: O_EXCL, one-value tags, private perms."""
+"""Signed-v2 manifest production, sidecars, and Post transport."""
 
 from __future__ import annotations
 
+import json
 import os
 import stat
 import tempfile
@@ -11,7 +12,13 @@ from pathlib import Path
 from unittest.mock import patch
 
 from porch3 import signer
-from porch3.send import SendResult
+from porch3 import send as send_mod
+from porch3.send import SendResult, send_as_owner
+from porch3.signature_v2 import (
+    MAX_SIGNED_BODY_BYTES,
+    POST_DEFAULT_BODY_BYTES,
+    manifest_bytes,
+)
 from porch3.signer import Signer
 from helpers import make_porch_config
 
@@ -22,10 +29,10 @@ class SidecarCreationTest(unittest.TestCase):
             sigs = Path(tmp) / "sigs"
             with patch.object(signer, "_utc_stamp", return_value="20250110T120000Z"):
                 first_tag, first_path = signer._create_payload(
-                    "hello one", sigs_dir=sigs
+                    "hello one", channel="commons", sigs_dir=sigs
                 )
                 second_tag, second_path = signer._create_payload(
-                    "hello two", sigs_dir=sigs
+                    "hello two", channel="commons", sigs_dir=sigs
                 )
             self.assertNotEqual(first_path, second_path)
             self.assertEqual(first_tag, "20250110T120000Z")
@@ -36,11 +43,9 @@ class SidecarCreationTest(unittest.TestCase):
                 (second_tag, second_path, "hello two"),
             ):
                 self.assertEqual(path.name, f"{tag}.txt")
-                lines = path.read_text().splitlines()
-                # Tag, first line, and file name are one value — a
-                # disagreement here verifies as FORGED.
-                self.assertEqual(lines[0], tag)
-                self.assertEqual(lines[1], text)
+                self.assertEqual(
+                    path.read_bytes(), manifest_bytes(tag, "commons", text)
+                )
 
     def test_concurrent_threads_never_share_a_sidecar(self):
         results: list[tuple[str, Path]] = []
@@ -52,7 +57,9 @@ class SidecarCreationTest(unittest.TestCase):
 
             def make(index: int) -> None:
                 barrier.wait()
-                tag, path = signer._create_payload(f"body {index}", sigs_dir=sigs)
+                tag, path = signer._create_payload(
+                    f"body {index}", channel="commons", sigs_dir=sigs
+                )
                 with results_lock:
                     results.append((tag, path))
 
@@ -67,13 +74,19 @@ class SidecarCreationTest(unittest.TestCase):
             self.assertEqual(len(results), 6)
             self.assertEqual(len({path for _, path in results}), 6)
             for tag, path in results:
-                self.assertEqual(path.read_text().splitlines()[0], tag)
+                self.assertEqual(
+                    path.read_bytes()[: len(b"porch-signed-v2\n")],
+                    b"porch-signed-v2\n",
+                )
+                self.assertEqual(path.name, f"{tag}.txt")
 
     def test_perms_are_private(self):
         with tempfile.TemporaryDirectory() as tmp:
             sigs = Path(tmp) / "sigs"
             sigs.mkdir(mode=0o755)
-            _, path = signer._create_payload("private", sigs_dir=sigs)
+            _, path = signer._create_payload(
+                "private", channel="commons", sigs_dir=sigs
+            )
             self.assertEqual(stat.S_IMODE(sigs.stat().st_mode), 0o700)
             self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
 
@@ -91,7 +104,9 @@ class SidecarCreationTest(unittest.TestCase):
             with patch.object(
                 signer.os, "open", side_effect=taken_in_sigs
             ), self.assertRaises(OSError):
-                signer._create_payload("never lands", sigs_dir=sigs)
+                signer._create_payload(
+                    "never lands", channel="commons", sigs_dir=sigs
+                )
 
 
 class SidecarWriteFailureTest(unittest.TestCase):
@@ -110,11 +125,115 @@ class SidecarWriteFailureTest(unittest.TestCase):
             with patch.object(
                 signer.os, "fdopen", side_effect=exploding_fdopen
             ), self.assertRaises(OSError):
-                signer._create_payload("never written", sigs_dir=sigs)
+                signer._create_payload(
+                    "never written", channel="commons", sigs_dir=sigs
+                )
             self.assertEqual(list(sigs.iterdir()), [])
 
 
+class ManifestTest(unittest.TestCase):
+    def test_exact_ascii_manifest_binds_raw_utf8_body(self):
+        tag = "20260812T203000Zabc123"
+        body = " first\r\n\rline\n\u2028\u2029\x00e\u0301👩‍🚀🦊🔏 [signed:BAIT]\t\n"
+        expected = (
+            "porch-signed-v2\n"
+            f"tag: {tag}\n"
+            "channel: commons\n"
+            f"bytes: {len(body.encode('utf-8'))}\n"
+            "sha256: "
+            "1fdee400fc1199ae6cb6d66e9625640bdb0b5631f18f31314da330a9803642e7\n"
+        ).encode("ascii")
+        self.assertEqual(manifest_bytes(tag, "commons", body), expected)
+        self.assertEqual(expected.count(b"\n"), 5)
+        self.assertTrue(expected.endswith(b"\n"))
+        self.assertFalse(expected.endswith(b"\n\n"))
+
+    def test_manifest_refuses_ambiguous_tag_or_channel_lines(self):
+        for tag in ("", "bad/tag", "bad_tag", "tag\nextra"):
+            with self.subTest(tag=tag), self.assertRaises(ValueError):
+                manifest_bytes(tag, "commons", "body")
+        for channel in ("", "../commons", "bad/channel", "bad\nchannel"):
+            with self.subTest(channel=channel), self.assertRaises(ValueError):
+                manifest_bytes("TAG1", channel, "body")
+
+    def test_manifest_encodes_valid_unicode_channel_as_utf8(self):
+        manifest = manifest_bytes("TAG1", "機械室", "body")
+        self.assertIn("channel: 機械室\n".encode(), manifest)
+
+
 class SignAndSendFailureTest(unittest.TestCase):
+    def _signed_result(self, text: str) -> tuple[SendResult, bytes, tuple]:
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = make_porch_config(Path(tmp))
+            signer_obj = Signer(cfg)
+            sent = []
+
+            class Signed:
+                returncode = 0
+
+            def wrote_sig(cmd, **kwargs):
+                Path(str(cmd[-1]) + ".sig").write_text("SIGNATURE")
+                return Signed()
+
+            def fake_send(*args, **kwargs):
+                sent.append((args, kwargs))
+                return SendResult(ok=True, message="sent")
+
+            with patch.object(signer.subprocess, "run", side_effect=wrote_sig), patch.object(
+                signer, "send_as_owner", side_effect=fake_send
+            ):
+                result = signer_obj.sign_and_send("commons", text)
+            payloads = list(cfg.sigs_dir.glob("*.txt"))
+            self.assertEqual(len(payloads), 1)
+            return result, payloads[0].read_bytes(), sent[0]
+
+    def test_multiline_and_carriage_returns_are_signed_without_decoration(self):
+        body = "first\r\nsecond\rthird\n\n🦊🔏 [signed:BAIT]\t\n"
+        result, payload, call = self._signed_result(body)
+        self.assertTrue(result.ok)
+        args, kwargs = call
+        self.assertEqual(args[:2], ("commons", body))
+        self.assertTrue(kwargs["raw"])
+        self.assertRegex(kwargs["signature_ref"], r"^[0-9A-Za-z-]+$")
+        self.assertEqual(
+            payload,
+            manifest_bytes(kwargs["signature_ref"], "commons", body),
+        )
+
+    def test_exactly_one_mib_is_signed(self):
+        body = "x" * MAX_SIGNED_BODY_BYTES
+        result, payload, call = self._signed_result(body)
+        self.assertTrue(result.ok)
+        self.assertIn(
+            f"bytes: {MAX_SIGNED_BODY_BYTES}\n".encode("ascii"), payload
+        )
+        self.assertEqual(call[0][1], body)
+
+    def test_over_one_mib_is_refused_before_sidecars_or_processes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = make_porch_config(Path(tmp))
+            signer_obj = Signer(cfg)
+            with patch.object(
+                signer,
+                "_create_payload",
+                side_effect=AssertionError("payload creation must not run"),
+            ), patch.object(
+                signer.subprocess,
+                "run",
+                side_effect=AssertionError("ssh-keygen must not run"),
+            ), patch.object(
+                signer,
+                "send_as_owner",
+                side_effect=AssertionError("post must not run"),
+            ):
+                result = signer_obj.sign_and_send(
+                    "commons", "x" * (MAX_SIGNED_BODY_BYTES + 1)
+                )
+            self.assertFalse(result.ok)
+            self.assertEqual(result.error_code, "sign_failed")
+            self.assertIn("1,048,576-byte limit", result.message)
+            self.assertFalse(cfg.sigs_dir.exists())
+
     def test_sign_failure_removes_the_sidecar(self):
         with tempfile.TemporaryDirectory() as tmp:
             cfg = make_porch_config(Path(tmp))
@@ -128,6 +247,69 @@ class SignAndSendFailureTest(unittest.TestCase):
             self.assertFalse(result.ok)
             self.assertEqual(result.error_code, "sign_failed")
             self.assertEqual(list(sigs.iterdir()) if sigs.exists() else [], [])
+
+
+class SendTransportTest(unittest.TestCase):
+    def _send(self, body: str, **kwargs):
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = make_porch_config(Path(tmp))
+
+            class Posted:
+                returncode = 0
+                stdout = json.dumps({"ok": True})
+                stderr = ""
+
+            with patch.object(
+                send_mod.subprocess, "run", return_value=Posted()
+            ) as run:
+                result = send_as_owner(
+                    "commons", body, config=cfg, raw=True, **kwargs
+                )
+            self.assertTrue(result.ok)
+            return run.call_args
+
+    def test_signed_body_is_streamed_exactly_and_never_placed_in_argv(self):
+        body = "\x00first\r\nsecond\n\u2028👩‍🚀\t "
+        call = self._send(body, signature_ref="TAG1")
+        cmd = call.args[0]
+        self.assertNotIn(body, cmd)
+        self.assertIn("--body-file", cmd)
+        self.assertIn("/dev/stdin", cmd)
+        self.assertEqual(cmd[cmd.index("--signature-ref") + 1], "TAG1")
+        self.assertEqual(call.kwargs["input"], body)
+        self.assertTrue(call.kwargs["text"])
+        self.assertEqual(call.kwargs["encoding"], "utf-8")
+
+    def test_signed_oversize_flag_is_added_only_above_post_default(self):
+        at_limit = self._send(
+            "x" * POST_DEFAULT_BODY_BYTES, signature_ref="TAG1"
+        )
+        above = self._send(
+            "x" * (POST_DEFAULT_BODY_BYTES + 1), signature_ref="TAG1"
+        )
+        self.assertNotIn("--oversize", at_limit.args[0])
+        self.assertIn("--oversize", above.args[0])
+
+    def test_anyway_and_unsigned_prefix_behavior_are_preserved(self):
+        signed = self._send("body", signature_ref="TAG1", anyway=True)
+        self.assertIn("--anyway", signed.args[0])
+
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = make_porch_config(Path(tmp))
+
+            class Posted:
+                returncode = 0
+                stdout = json.dumps({"ok": True})
+                stderr = ""
+
+            with patch.object(
+                send_mod.subprocess, "run", return_value=Posted()
+            ) as run:
+                send_as_owner("commons", "hello", config=cfg)
+            self.assertEqual(
+                run.call_args.kwargs["input"], cfg.wire.prefix_casual("hello")
+            )
+            self.assertNotIn("--signature-ref", run.call_args.args[0])
 
     def test_sign_failure_removes_a_partial_signature(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -12,6 +12,7 @@ from porch3.app import PorchApp
 from helpers import make_porch_config
 from porch3.images import spool_image
 from porch3.send import SendResult
+from porch3.signature_v2 import MAX_SIGNED_BODY_BYTES
 from porch3.signer import Signer
 from porch3 import verify as verify_mod
 from porch3.widgets.composer import Composer
@@ -87,6 +88,72 @@ async def test_composer_multiline_and_paste_not_send(channel_root: Path):
         assert "line1\nline2\nline3" in composer.text.replace("\r\n", "\n")
         # Still in chat — no quit, draft preserved
         assert app.mode == "chat"
+
+
+async def test_signed_multiline_preserves_the_exact_desktop_draft(
+    channel_root: Path,
+):
+    cfg = make_porch_config(channel_root)
+    signer = Signer(cfg)
+    signer.env = {"SSH_AUTH_SOCK": "/dev/null", "SSH_AGENT_PID": "1"}
+    app = _make_app(channel_root, signer=signer)
+    multiline = " \tfirst\r\n\rsecond\n\u2028👩‍🚀🦊🔏 [signed:BAIT]\t\n"
+    sent: list[str] = []
+
+    def capture(channel, text, **kwargs):
+        sent.append(text)
+        return SendResult(ok=True, message="sent")
+
+    async with app.run_test() as pilot:
+        composer = app.query_one("#composer", Composer)
+        composer.set_draft(multiline)
+        with patch.object(Signer, "sign_and_send", side_effect=capture):
+            app._submit_text(multiline)
+            await pilot.pause()
+
+        assert sent == [multiline]
+        assert composer.text == ""
+
+
+async def test_signed_over_cap_keeps_the_exact_desktop_draft(
+    channel_root: Path,
+):
+    cfg = make_porch_config(channel_root)
+    signer = Signer(cfg)
+    signer.env = {"SSH_AUTH_SOCK": "/dev/null", "SSH_AGENT_PID": "1"}
+    app = _make_app(channel_root, signer=signer)
+    draft = "x" * (MAX_SIGNED_BODY_BYTES + 1)
+
+    async with app.run_test() as pilot:
+        composer = app.query_one("#composer", Composer)
+        composer.set_draft(draft)
+        app._submit_text(draft)
+        await pilot.pause()
+        assert composer.text == draft
+        assert "1,048,576-byte limit" in app.status
+        assert not cfg.sigs_dir.exists()
+
+
+async def test_unsigned_multiline_still_sends_unchanged(channel_root: Path):
+    app = _make_app(channel_root)
+    multiline = "line one\nline two"
+    sent: list[str] = []
+
+    def capture(channel, text, **kwargs):
+        sent.append(text)
+        return SendResult(ok=True, message="sent")
+
+    async with app.run_test() as pilot:
+        import porch3.send as send_mod
+
+        with patch.object(send_mod, "send_as_owner", side_effect=capture):
+            composer = app.query_one("#composer", Composer)
+            composer.set_draft(multiline)
+            app._do_send(multiline)
+            await pilot.pause()
+
+        assert sent == [multiline]
+        assert composer.text == ""
 
 
 async def test_channel_browser_population(channel_root: Path):
@@ -295,6 +362,47 @@ async def test_bounce_edited_composer_sends_current_not_stale(channel_root: Path
             assert "edited-final" in last_body
             assert "original" not in last_body
             assert last_anyway is False
+
+
+async def test_bounce_treats_outer_whitespace_edit_as_a_real_edit(
+    channel_root: Path,
+):
+    app = _make_app(channel_root)
+    crossed = SendResult(
+        ok=False,
+        error_code="crossed_send",
+        message="crossed",
+        missed=[
+            {
+                "id": "m1",
+                "from": "juniper",
+                "sent": "2025-01-06 12:30:00 -0400",
+                "body": "landed first",
+                "mentions": [],
+            }
+        ],
+    )
+    ok = SendResult(ok=True, message="sent")
+    bodies: list[tuple[str, bool]] = []
+
+    def fake_send(_channel, text, *, anyway=False, **_kwargs):
+        bodies.append((text, anyway))
+        return crossed if len(bodies) == 1 else ok
+
+    async with app.run_test() as pilot:
+        import porch3.send as send_mod
+
+        with patch.object(send_mod, "send_as_owner", side_effect=fake_send):
+            composer = app.query_one("#composer", Composer)
+            composer.set_draft("original")
+            app._submit_text(composer.text)
+            await pilot.pause()
+            assert app.query_one("#bounce", BounceBanner).active
+            composer.set_draft(" original ")
+            app.on_composer_submitted(Composer.Submitted(composer.text))
+            await pilot.pause()
+
+    assert bodies == [("original", False), (" original ", False)]
 
 
 async def test_delivered_output_failure_clears_draft_no_retry(channel_root: Path):
@@ -800,15 +908,27 @@ async def test_rendered_messages_catch_cursor_up(channel_root: Path):
             assert calls[-1] == "workbench"
 
 
-def _drop_msg(root: Path, channel: str, mid: str, body: str, sender: str = "juniper") -> None:
+def _drop_msg(
+    root: Path,
+    channel: str,
+    mid: str,
+    body: str,
+    sender: str = "juniper",
+    **extra,
+) -> None:
     store = root / channel / "messages"
     meta = {
         "id": mid,
         "from": sender,
+        "channel": channel,
         "sent": f"2025-01-08 22:{mid[-2:]}:00 -0400",
         "mentions": [],
+        **extra,
     }
-    (store / f"{mid}.msg").write_text(json.dumps(meta) + "\n---\n" + body + "\n")
+    suffix = "" if "signature_ref" in meta else "\n"
+    (store / f"{mid}.msg").write_text(
+        json.dumps(meta) + "\n---\n" + body + suffix
+    )
 
 
 async def test_pagedown_at_bottom_keeps_follow(channel_root: Path):
@@ -1061,6 +1181,64 @@ async def test_dr_observe_ratifies_treys_signed_accept(
             await pilot.pause(0.05)
         assert app.dr_records["dr-1"]["state"] == "ratified"
         assert app.dr_records["dr-1"]["actor_message_id"] == "20250108-2232"
+
+
+async def test_dr_observe_recognizes_exact_v2_action(
+    channel_root: Path, monkeypatch
+):
+    from porch3 import drstore
+
+    cfg = make_porch_config(channel_root)
+    log = cfg.dr_log_path
+    action_id = "20250108-2242-000000-v2act1"
+    monkeypatch.setattr(
+        drstore,
+        "authentic_action",
+        lambda mid, mail_root=None, **kw: (
+            ("dr-1", "accepted", None) if mid == action_id else None
+        ),
+    )
+    drstore.propose(
+        title="v2",
+        project="p",
+        channel="commons",
+        anchor_message_id="m-anchor-v2",
+        path=log,
+    )
+    app = _make_app(channel_root)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        for _ in range(20):
+            if app.dr_records:
+                break
+            await pilot.pause(0.05)
+        _drop_msg(
+            channel_root,
+            "commons",
+            "20250108-2241-000000-v2near",
+            "context\n⚖️ DR dr-1 accepted",
+            sender="mara",
+            signature_ref={"version": 2, "tag": "NEAR"},
+        )
+        app._poll_messages()
+        await pilot.pause()
+        assert not drstore.has_actor_event(drstore.replay(log), "20250108-2241-000000-v2near")
+
+        _drop_msg(
+            channel_root,
+            "commons",
+            action_id,
+            "⚖️ DR dr-1 accepted",
+            sender="mara",
+            signature_ref={"version": 2, "tag": "ACTION"},
+        )
+        app._poll_messages()
+        for _ in range(20):
+            await pilot.pause(0.05)
+            if app.dr_records.get("dr-1", {}).get("state") == "ratified":
+                break
+        assert app.dr_records["dr-1"]["state"] == "ratified"
+        assert app.dr_records["dr-1"]["actor_message_id"] == action_id
 
 
 def test_unsigned_trey_body_denied_spool_privilege():

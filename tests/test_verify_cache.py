@@ -20,6 +20,64 @@ SRC = str(Path(__file__).resolve().parent.parent / "src")
 
 
 class VerifyCacheMergeTest(unittest.TestCase):
+    def test_owner_present_malformed_v2_locator_still_queues_and_badges(self):
+        class FakeConfig:
+            mail_root = Path("/tmp/mail-mara")
+            allowed_signers = Path("/tmp/signers-mara")
+            principal = "mara"
+            signing_namespace = "porch"
+            marker = "🦊"
+            source_path = Path("/tmp/porch.toml")
+            signing_disabled = False
+            sigs_dir = Path("/tmp/sigs-mara")
+            owner_room = "mara"
+
+        msg = {
+            "id": "20250111-120000-000001-v20001",
+            "from": "mara",
+            "body": "ordinary undecorated body",
+            "signature_ref_present": True,
+            "signature_ref": None,
+        }
+        verify.VERIFY_CACHE.clear()
+        clear_trust_context()
+        verify._VERIFY_QUEUED.clear()
+        verify.set_trust_context(FakeConfig())
+        with patch.object(verify, "ensure_verify_worker"):
+            verify.enqueue_verifications([msg])
+        self.assertIn((verify._TRUST, msg["id"]), verify._VERIFY_QUEUED)
+        self.assertEqual(verify.verify_badge(msg), " 🔏…")
+        verify.VERIFY_CACHE[verify._ck(msg["id"])] = " 🔏✗UNVERIFIED"
+        self.assertEqual(verify.verify_badge(msg), " 🔏✗UNVERIFIED")
+        verify.VERIFY_CACHE.clear()
+        verify._VERIFY_QUEUED.clear()
+        clear_trust_context()
+
+    def test_nonowner_locator_is_inert_for_candidate_detection(self):
+        class FakeConfig:
+            mail_root = Path("/tmp/mail-mara")
+            allowed_signers = Path("/tmp/signers-mara")
+            principal = "mara"
+            signing_namespace = "porch"
+            marker = "🦊"
+            source_path = Path("/tmp/porch.toml")
+            signing_disabled = False
+            sigs_dir = Path("/tmp/sigs-mara")
+            owner_room = "mara"
+
+        msg = {
+            "id": "20250111-120000-000002-v20002",
+            "from": "other",
+            "body": "🦊🔏 copied valid-looking v1 [signed:TAG]",
+            "signature_ref_present": True,
+            "signature_ref": {"version": 2, "tag": "TAG"},
+        }
+        clear_trust_context()
+        verify.set_trust_context(FakeConfig())
+        self.assertFalse(verify.is_signed_msg(msg))
+        self.assertEqual(verify.verify_badge(msg), "")
+        clear_trust_context()
+
     def test_write_merges_with_entries_already_on_disk(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "verify-cache.json"

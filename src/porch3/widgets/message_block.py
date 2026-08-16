@@ -19,7 +19,12 @@ from porch3.images import (
 )
 from porch3.mentions import body_mentions_owner, highlight_mentions
 from porch3.sanitize import sanitize_display
-from porch3.store import clean_body, fmt_time, reply_preview_line, sender_label
+from porch3.store import (
+    clean_message_body,
+    fmt_time,
+    reply_preview_line,
+    sender_label,
+)
 from porch3.verify import verified_owner, verify_badge
 from porch3.wire import DEFAULT_WIRE, WireFormat
 
@@ -172,7 +177,7 @@ class MessageBlock(Vertical):
         if reply:
             yield Label(Text(reply), classes="msg-reply", markup=False)
 
-        body = clean_body(self.msg.get("body") or "", wire=self.wire)
+        body = clean_message_body(self.msg, wire=self.wire)
         # Spool paths display as [image N]; candidate extraction below still
         # sees the real paths in `body`.
         yield Static(
@@ -242,7 +247,7 @@ class MessageBlock(Vertical):
         validation/decode runs in a thread worker — never on the UI thread.
         Returns the number of candidates scheduled.
         """
-        body = clean_body(self.msg.get("body") or "", wire=self.wire)
+        body = clean_message_body(self.msg, wire=self.wire)
         scheduled = 0
         for path in find_candidate_paths(body):
             if self._own and is_spool_path(path):

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import stat
 import subprocess
@@ -11,6 +12,7 @@ import pytest
 
 from helpers import make_porch_config
 from porch3.config import emit_toml
+from porch3.signature_v2 import MAX_SIGNED_BODY_BYTES, manifest_bytes
 from porch3.verifycli import (
     EXIT_ENV,
     EXIT_FAIL,
@@ -18,6 +20,8 @@ from porch3.verifycli import (
     EXIT_OK,
     EXIT_USAGE,
     main,
+    held_read_channel_record,
+    held_read_unique_message_record,
     validate_channel_name,
     validate_message_id,
     verify_body_bytes,
@@ -38,12 +42,28 @@ def cfg(tmp_path, monkeypatch):
     return config
 
 
-def _write_msg(cfg, channel: str, mid: str, body: str) -> Path:
+def _write_msg(
+    cfg,
+    channel: str,
+    mid: str,
+    body: str,
+    *,
+    sender: str = "mara",
+    signature_ref=...,
+    envelope_channel: str | None = None,
+) -> Path:
     store = cfg.channels_dir / channel / "messages"
     store.mkdir(parents=True, exist_ok=True)
     path = store / f"{mid}.msg"
+    envelope = {"id": mid, "from": sender, "sent": "x"}
+    if envelope_channel is not None:
+        envelope["channel"] = envelope_channel
+    if signature_ref is not ...:
+        envelope["signature_ref"] = signature_ref
     path.write_bytes(
-        (f'{{"id":"{mid}","from":"mara","sent":"x"}}\n---\n{body}').encode()
+        json.dumps(envelope, separators=(",", ":")).encode()
+        + b"\n---\n"
+        + body.encode()
     )
     return path
 
@@ -82,6 +102,28 @@ def _install_signing_identity(cfg, tmp_path: Path, *, passphrase: str = "") -> N
 def _sign_payload(cfg, key: Path, tag: str, channel_text: str) -> bytes:
     """Sign bare channel text (no marker prefix) into sigs/{tag}.txt[.sig]."""
     payload = f"{tag}\n{channel_text}\n".encode()
+    payload_path = cfg.sigs_dir / f"{tag}.txt"
+    payload_path.write_bytes(payload)
+    subprocess.run(
+        [
+            "ssh-keygen",
+            "-Y",
+            "sign",
+            "-f",
+            str(key),
+            "-n",
+            cfg.signing_namespace,
+            str(payload_path),
+        ],
+        check=True,
+        capture_output=True,
+        input=b"\n",
+    )
+    return payload
+
+
+def _sign_v2(cfg, key: Path, tag: str, channel: str, body: str) -> bytes:
+    payload = manifest_bytes(tag, channel, body)
     payload_path = cfg.sigs_dir / f"{tag}.txt"
     payload_path.write_bytes(payload)
     subprocess.run(
@@ -733,3 +775,199 @@ def test_main_runs_owner_crosscheck(cfg, monkeypatch):
     code = verifycli.main(["--stdin"])
     assert calls
     assert code == EXIT_FAIL
+
+
+def test_v2_genuine_multiline_round_trip_is_body_exact(cfg, tmp_path):
+    key = _install_signing_identity(cfg, tmp_path)
+    tag = "20250111T200000Z"
+    body = "  first line\r\n\n🦊🔏 bait [signed:NOT-A-REF]\nlast\t \n"
+    _sign_v2(cfg, key, tag, "commons", body)
+    _write_msg(
+        cfg,
+        "commons",
+        CANON_MID,
+        body,
+        signature_ref={"version": 2, "tag": tag},
+        envelope_channel="commons",
+    )
+
+    code, message = verify_message_id(CANON_MID, config=cfg)
+    assert code == EXIT_OK, message
+    assert "VERIFIED" in message
+
+    # Body-only input is deliberately the legacy v1 surface; it cannot infer
+    # v2's storage channel or envelope locator.
+    body_code, _ = verify_body_bytes(body.encode(), config=cfg)
+    assert body_code == EXIT_FAIL
+
+    held = held_read_unique_message_record(cfg.mail_root, CANON_MID)
+    assert held.storage_channel == "commons"
+    assert held.envelope["signature_ref"] == {"version": 2, "tag": tag}
+    assert held.signature_ref_present is True
+    assert held.body == body.encode()
+
+
+def test_v2_explicit_channel_record_retains_absent_vs_null(cfg):
+    _write_msg(
+        cfg,
+        "commons",
+        CANON_MID,
+        "body",
+        signature_ref=None,
+        envelope_channel="commons",
+    )
+    held = held_read_channel_record(cfg.mail_root, "commons", CANON_MID)
+    assert held.signature_ref_present is True
+    assert held.envelope["signature_ref"] is None
+
+    _write_msg(cfg, "commons", CANON_MID_B, "body")
+    absent = held_read_channel_record(cfg.mail_root, "commons", CANON_MID_B)
+    assert absent.signature_ref_present is False
+
+
+@pytest.mark.parametrize(
+    "locator",
+    [
+        None,
+        [],
+        {"version": True, "tag": "TAG"},
+        {"version": 1, "tag": "TAG"},
+        {"version": 2, "tag": "bad_tag"},
+        {"version": 2, "tag": "TAG", "extra": 1},
+        {"tag": "TAG"},
+    ],
+)
+def test_owner_present_malformed_v2_locator_is_loud_without_v1_fallback(
+    cfg, locator
+):
+    # The body is valid-looking v1 syntax. A present owner locator must still
+    # select v2 and fail rather than falling back.
+    body = "🦊🔏 hello [signed:TAG]"
+    (cfg.sigs_dir / "TAG.txt").write_bytes(b"TAG\nhello\n")
+    (cfg.sigs_dir / "TAG.txt.sig").write_bytes(b"x")
+    _write_msg(
+        cfg,
+        "commons",
+        CANON_MID,
+        body,
+        signature_ref=locator,
+        envelope_channel="commons",
+    )
+    code, message = verify_message_id(CANON_MID, config=cfg)
+    assert code == EXIT_FAIL
+    assert "signature_ref" in message
+
+
+def test_owner_present_null_never_calls_v1_verifier(cfg, monkeypatch):
+    import porch3.verifycli as vc
+
+    _write_msg(
+        cfg,
+        "commons",
+        CANON_MID,
+        "🦊🔏 copied valid-looking v1 [signed:TAG]",
+        signature_ref=None,
+        envelope_channel="commons",
+    )
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("present owner locator must not fall back to v1")
+
+    monkeypatch.setattr(vc, "verify_body_bytes", forbidden)
+    code, message = verify_message_id(CANON_MID, config=cfg)
+    assert code == EXIT_FAIL
+    assert "signature_ref" in message
+
+
+def test_non_owner_locator_cannot_fall_through_to_copied_valid_v1(cfg, tmp_path):
+    key = _install_signing_identity(cfg, tmp_path)
+    tag = "20250111T201000Z"
+    text = "legacy proof"
+    _sign_payload(cfg, key, tag, text)
+    body = f"🦊🔏 {text} [signed:{tag}]"
+    _write_msg(
+        cfg,
+        "commons",
+        CANON_MID,
+        body,
+        sender="not-mara",
+        signature_ref={"version": 999, "tag": "BAD"},
+        envelope_channel="wrong-channel",
+    )
+    code, message = verify_message_id(CANON_MID, config=cfg)
+    assert code == EXIT_FAIL
+    assert "configured owner" in message
+
+
+def test_v2_binds_actual_storage_channel_and_body(cfg, tmp_path):
+    key = _install_signing_identity(cfg, tmp_path)
+    tag = "20250111T202000Z"
+    body = "signed body\n"
+    _sign_v2(cfg, key, tag, "commons", body)
+    _write_msg(
+        cfg,
+        "commons",
+        CANON_MID,
+        body,
+        signature_ref={"version": 2, "tag": tag},
+        envelope_channel="renamed",
+    )
+    code, message = verify_message_id(CANON_MID, config=cfg)
+    assert code == EXIT_FAIL
+    assert "storage channel" in message or "channel" in message
+
+    _write_msg(
+        cfg,
+        "commons",
+        CANON_MID,
+        body + "mutated",
+        signature_ref={"version": 2, "tag": tag},
+        envelope_channel="commons",
+    )
+    code, message = verify_message_id(CANON_MID, config=cfg)
+    assert code == EXIT_FAIL
+    assert "manifest" in message or "differs" in message
+
+
+def test_v2_oversize_fails_before_sidecar_reads_or_hash(cfg, monkeypatch):
+    import porch3.verifycli as vc
+
+    body = "x" * (MAX_SIGNED_BODY_BYTES + 1)
+    _write_msg(
+        cfg,
+        "commons",
+        CANON_MID,
+        body,
+        signature_ref={"version": 2, "tag": "TAG"},
+        envelope_channel="commons",
+    )
+
+    real_read = vc._read_regular_nofollow
+
+    def forbidden(path, *, limit, label, dir_fd=None):
+        if label == "message":
+            return real_read(path, limit=limit, label=label, dir_fd=dir_fd)
+        raise AssertionError("oversize v2 must fail before sidecars or hashing")
+
+    monkeypatch.setattr(vc, "_read_regular_nofollow", forbidden)
+    monkeypatch.setattr(vc, "manifest_bytes", forbidden)
+    code, message = verify_message_id(CANON_MID, config=cfg)
+    assert code == EXIT_FAIL
+    assert "1048576" in message or "1 MiB" in message
+
+
+def test_v2_exact_cap_verifies(cfg, tmp_path):
+    key = _install_signing_identity(cfg, tmp_path)
+    tag = "20250111T203000Z"
+    body = "x" * MAX_SIGNED_BODY_BYTES
+    _sign_v2(cfg, key, tag, "commons", body)
+    _write_msg(
+        cfg,
+        "commons",
+        CANON_MID,
+        body,
+        signature_ref={"version": 2, "tag": tag},
+        envelope_channel="commons",
+    )
+    code, message = verify_message_id(CANON_MID, config=cfg)
+    assert code == EXIT_OK, message

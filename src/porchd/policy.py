@@ -84,7 +84,8 @@ def dispatch(
     real security bug in the TUI (`/votex choice` reached `/vote` and
     broadcast as the owner), and the phone must not reintroduce it.
     """
-    text = (draft_text or "").strip()
+    raw = draft_text or ""
+    text = raw.strip()
     if not text:
         return Refusal("empty_draft", "nothing to send")
 
@@ -92,7 +93,7 @@ def dispatch(
     arg = text[len(first):].strip()
 
     if not first.startswith("/"):
-        return make_wire(text, draft_text=draft_text, attachments=attachments,
+        return make_wire(raw, draft_text=draft_text, attachments=attachments,
                          spool_paths=spool_paths)
 
     if first in NON_SEND_COMMANDS:

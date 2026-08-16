@@ -16,7 +16,13 @@ from porch3 import drstore
 from porch3.images import display_body
 from porch3.mentions import body_mentions_owner, mention_pattern
 from porch3.sanitize import sanitize_display
-from porch3.store import clean_body, fmt_day, fmt_time, reply_preview_line, sender_label
+from porch3.store import (
+    clean_message_body,
+    fmt_day,
+    fmt_time,
+    reply_preview_line,
+    sender_label,
+)
 from porch3.verify import verify_badge
 from porch3.wire import DEFAULT_WIRE, WireFormat
 from porchd import imagesvc
@@ -66,9 +72,10 @@ def message_json(
     accent = owner_accent if owner_accent is not None else DEFAULT_OWNER_ACCENT
     sender = msg.get("from") or ""
 
-    # Policy on raw bytes, in this order: strip the signing wire format,
-    # then substitute own spool paths for [image N] display tokens.
-    cleaned = clean_body(raw_body, wire=fmt)
+    # Policy on raw bytes, in this order: strip only legacy decoration, then
+    # substitute own spool paths for [image N] display tokens. V2 bodies are
+    # authored content and stay intact.
+    cleaned = clean_message_body(msg, wire=fmt)
     displayed = display_body(cleaned, own=own)
     body = sanitize_display(displayed)
 

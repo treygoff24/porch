@@ -15,6 +15,12 @@ from pathlib import Path
 
 from porch3.config import PorchConfig
 from porch3.send import SendResult, send_as_owner
+from porch3.signature_v2 import (
+    MAX_SIGNED_BODY_BYTES,
+    body_bytes,
+    manifest_bytes,
+    validate_channel,
+)
 
 # post's tag parser rejects '-', so collision suffixes stay alphanumeric
 # (v0.3 review finding F2).
@@ -35,14 +41,16 @@ def _unlink_quietly(*paths: Path) -> None:
             pass
 
 
-def _create_payload(text: str, *, sigs_dir: Path) -> tuple[str, Path]:
-    """Create the payload sidecar; return (tag, path).
+def _create_payload(
+    text: str, *, channel: str, sigs_dir: Path
+) -> tuple[str, Path]:
+    """Create a signed-v2 manifest sidecar; return ``(tag, path)``.
 
-    The tag, the payload's first line, and the file name are one value, so
-    they cannot disagree: a mismatch verifies as FORGED. Creation is
-    O_EXCL, so a same-second writer in another process loses the race
-    loudly and retries under a fresh random suffix instead of overwriting.
+    The tag inside the manifest and the file name are one value, so a rename
+    mismatch fails verification. Creation is O_EXCL, so a same-second writer
+    in another process retries under a fresh suffix instead of overwriting.
     """
+    validate_channel(channel)
     sigs_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
     os.chmod(sigs_dir, 0o700)
     base = _utc_stamp()
@@ -54,6 +62,7 @@ def _create_payload(text: str, *, sigs_dir: Path) -> tuple[str, Path]:
                 secrets.choice(_SUFFIX_ALPHABET) for _ in range(_SUFFIX_LEN)
             )
             tag = f"{_utc_stamp()}{suffix}"
+        payload = manifest_bytes(tag, channel, text)
         path = sigs_dir / f"{tag}.txt"
         try:
             fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
@@ -63,14 +72,14 @@ def _create_payload(text: str, *, sigs_dir: Path) -> tuple[str, Path]:
         # to take it back out — an orphan the caller never hears about
         # would sit in sigs/ forever.
         try:
-            handle = os.fdopen(fd, "w")
+            handle = os.fdopen(fd, "wb")
         except OSError:
             os.close(fd)
             _unlink_quietly(path)
             raise
         try:
             with handle:
-                handle.write(f"{tag}\n{text}\n")
+                handle.write(payload)
         except OSError:
             _unlink_quietly(path)
             raise
@@ -214,6 +223,22 @@ class Signer:
     def sign_and_send(
         self, channel: str, text: str, *, anyway: bool = False
     ) -> SendResult:
+        try:
+            size = len(body_bytes(text))
+        except (TypeError, UnicodeEncodeError):
+            return SendResult(
+                ok=False,
+                error_code="sign_failed",
+                message="signed body is not valid UTF-8 — draft kept",
+            )
+        if size > MAX_SIGNED_BODY_BYTES:
+            return SendResult(
+                ok=False,
+                error_code="sign_failed",
+                message=(
+                    "signed body exceeds the 1,048,576-byte limit — draft kept"
+                ),
+            )
         if self.config.signing_disabled:
             return SendResult(
                 ok=False,
@@ -236,8 +261,10 @@ class Signer:
                 ),
             )
         try:
-            ts, payload = _create_payload(text, sigs_dir=self.config.sigs_dir)
-        except OSError:
+            tag, payload = _create_payload(
+                text, channel=channel, sigs_dir=self.config.sigs_dir
+            )
+        except (OSError, ValueError):
             self.last_payload = None
             self.last_sig = None
             return SendResult(ok=False, error_code="sign_failed", message="SIGN FAILED")
@@ -281,10 +308,11 @@ class Signer:
         try:
             result = send_as_owner(
                 channel,
-                self.config.wire.prefix_signed(text, ts),
+                text,
                 config=self.config,
                 raw=True,
                 anyway=anyway,
+                signature_ref=tag,
             )
         except OSError:
             # OSError here is a pre-exec spawn failure (`post` missing, cwd

@@ -262,26 +262,6 @@ def _open_backoff(key: tuple[str, str], prior: tuple[int, float] | None) -> None
     _TIMEOUT_BACKOFF[key] = (strikes, _now() + delay)
 
 
-def _strip_header_bytes(raw: bytes) -> bytes:
-    """Drop a .msg JSON header using the literal ``\\n---\\n`` separator."""
-    if not raw.startswith(b"{"):
-        return raw
-    sep = b"\n---\n"
-    idx = raw.find(sep)
-    if idx < 0:
-        return raw
-    return raw[idx + len(sep) :]
-
-
-def _strip_header(raw: str) -> str:
-    """Drop a .msg JSON header (first line '{' … first '---' line)."""
-    if raw.startswith("{"):
-        _, sep, body = raw.partition("\n---\n")
-        if sep:
-            return body
-    return raw
-
-
 def _config_snapshot_for_verify(
     *,
     config,
@@ -356,9 +336,8 @@ def authentic_action(
         LookupIOError,
         MessageNotFound,
         SafeReadError,
-        held_read_unique_message,
-        verify_body_bytes,
-        _strip_msg_envelope,
+        held_read_unique_message_record,
+        verify_held_message,
     )
 
     snap = _config_snapshot_for_verify(
@@ -405,9 +384,9 @@ def authentic_action(
         return None
     result: tuple[str, str, str | None] | None = None
     unknown = False
-    raw: bytes | None = None
+    held = None
     try:
-        raw = held_read_unique_message(root, mid)
+        held = held_read_unique_message_record(root, mid)
     except DuplicateMessage:
         _open_backoff(memo_key, backoff)
         return None
@@ -415,29 +394,35 @@ def authentic_action(
         # Corpus absence is EXIT_LOOKUP/UNKNOWN — never a terminal negative.
         # Do not memoize; open bounded backoff so a later appearance can ratify.
         unknown = True
-        raw = None
+        held = None
     except (LookupIOError, SafeReadError, OSError):
         unknown = True
-        raw = None
-    if raw is not None:
-        body = _strip_msg_envelope(raw)
+        held = None
+    if held is not None:
         try:
-            code, _detail = verify_body_bytes(body, config=snap, wire=wire)
+            code, _detail = verify_held_message(held, config=snap, wire=wire)
         except Exception:
             unknown = True
             code = EXIT_ENV
         if code == EXIT_OK:
             try:
-                body_text = body.decode("utf-8")
+                body_text = held.body.decode("utf-8")
             except UnicodeDecodeError:
                 body_text = None
             if body_text is not None:
-                if body_text.endswith("\n"):
-                    body_text = body_text[:-1]
-                if "\r" not in body_text and "\n" not in body_text:
-                    parsed = parse_action_body(body_text, wire=wire)
-                    if parsed is not None:
-                        result = parsed
+                envelope = held.envelope
+                is_v2 = (
+                    held.signature_ref_present
+                    and envelope is not None
+                    and envelope.get("from") == snap.owner_room
+                )
+                if is_v2:
+                    result = parse_v2_action_body(body_text)
+                else:
+                    if body_text.endswith("\n"):
+                        body_text = body_text[:-1]
+                    if "\r" not in body_text and "\n" not in body_text:
+                        result = parse_action_body(body_text, wire=wire)
         elif code == EXIT_FAIL:
             result = None
         elif code in (EXIT_ENV, EXIT_LOOKUP, EXIT_USAGE):
@@ -653,6 +638,41 @@ def parse_action_body(
     if tail.startswith("superseded by "):
         return dr, "superseded", tail.removeprefix("superseded by ")
     return dr, tail, None
+
+
+_V2_ACTION_RE = re.compile(
+    r"^⚖️ DR (dr-\d{1,9}) "
+    r"(accepted|rejected|superseded by (dr-\d{1,9}))$"
+)
+
+
+def parse_v2_action_body(body: str) -> tuple[str, str, str | None] | None:
+    """Parse one exact undecorated v2 action body."""
+    match = _V2_ACTION_RE.fullmatch(body or "")
+    if match is None:
+        return None
+    dr, tail, replacement = match.groups()
+    if replacement is not None:
+        return dr, "superseded", replacement
+    return dr, tail, None
+
+
+def parse_observed_action(
+    msg: dict,
+    *,
+    owner_room: str,
+    wire: WireFormat = DEFAULT_WIRE,
+) -> tuple[str, str, str | None] | None:
+    """Recognize a live owner action without granting durable authority."""
+    if msg.get("from") != owner_room:
+        return None
+    locator_present = bool(
+        msg.get("signature_ref_present", "signature_ref" in msg)
+    )
+    body = msg.get("body") or ""
+    if locator_present:
+        return parse_v2_action_body(body)
+    return parse_action_body(body, wire=wire)
 
 
 def has_actor_event(events: list[dict], actor_message_id: str) -> bool:

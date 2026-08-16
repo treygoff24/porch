@@ -224,21 +224,37 @@ def test_a_revoked_device_is_refused_at_the_next_request(client, paired, svc):
 # ------------------------------------------------------------- size limits
 
 
-def test_a_body_over_the_json_cap_is_refused_before_it_is_read(client, paired):
+def test_a_non_send_body_over_the_json_cap_is_refused_before_it_is_read(
+    client, paired
+):
     oversize = b"x" * (server.MAX_JSON_BODY + 1)
     response, payload = client.request(
-        "POST", "/api/channels/commons/send", body=oversize
+        "POST", "/api/channels/commons/ack", body=oversize
     )
     assert response.status == 413
     assert json.loads(payload)["error"]["code"] == "too_large"
 
 
-def test_a_body_at_the_cap_is_accepted(client, paired):
-    draft = "y" * (server.MAX_JSON_BODY - 200)
-    body = json.dumps({"attempt_id": "big", "draft_text": draft}).encode()
-    assert len(body) <= server.MAX_JSON_BODY
+def test_send_accepts_worst_case_json_for_a_valid_one_mib_body(client, paired):
+    draft = "\x00" * 1_048_576
+    body = json.dumps(
+        {"attempt_id": "big", "draft_text": draft, "intent": "signed"}
+    ).encode()
+    assert server.MAX_JSON_BODY < len(body) <= server.MAX_SEND_JSON_BODY
     response, _ = client.request("POST", "/api/channels/commons/send", body=body)
     assert response.status in (200, 409)  # accepted by the boundary, not refused
+
+
+def test_send_over_its_json_cap_is_refused_before_read(client, paired):
+    status, payload = _headers_only(
+        client,
+        "/api/channels/commons/send",
+        [
+            "Content-Type: application/json",
+            f"Content-Length: {server.MAX_SEND_JSON_BODY + 1}",
+        ],
+    )
+    assert status == 413 and payload["error"]["code"] == "too_large"
 
 
 def _headers_only(client, path, extra_headers):
@@ -304,6 +320,254 @@ def test_an_upload_at_the_cap_passes_the_boundary(client, paired):
     # Refused by image validation, not by the size boundary.
     assert response.status == 400
     assert json.loads(payload)["error"]["code"] == "invalid_image"
+
+
+# -------------------------------------------------------------- keep-alive
+
+
+def _read_http_response(sock, leftover=b""):
+    """Read one HTTP/1.1 response from a raw socket, preserving pipelined bytes."""
+    data = leftover
+    while b"\r\n\r\n" not in data:
+        chunk = sock.recv(65536)
+        if not chunk:
+            raise AssertionError(f"connection closed while reading headers: {data[:300]!r}")
+        data += chunk
+    head, rest = data.split(b"\r\n\r\n", 1)
+    status_line, *header_lines = head.split(b"\r\n")
+    status = int(status_line.split()[1])
+    headers = {}
+    for line in header_lines:
+        name, _, value = line.partition(b":")
+        headers[name.strip().lower()] = value.strip()
+    length = int(headers.get(b"content-length", b"0"))
+    while len(rest) < length:
+        chunk = sock.recv(65536)
+        if not chunk:
+            break
+        rest += chunk
+    return status, headers, rest[:length], rest[length:]
+
+
+def _rejected_post(client, body, *, content_length=None):
+    """POST to a send route that refuses before reading the body (no cookie)."""
+    payload = body if isinstance(body, bytes) else body.encode()
+    length = len(payload) if content_length is None else content_length
+    return (
+        f"POST /api/channels/commons/send HTTP/1.1\r\n"
+        f"Host: 127.0.0.1:{client.port}\r\n"
+        f"Origin: http://127.0.0.1:{client.port}\r\n"
+        f"Content-Type: application/json\r\n"
+        f"Content-Length: {length}\r\n"
+        f"\r\n"
+    ).encode() + payload
+
+
+def _get_root(client, *, connection="close"):
+    return (
+        f"GET / HTTP/1.1\r\n"
+        f"Host: 127.0.0.1:{client.port}\r\n"
+        f"Connection: {connection}\r\n"
+        f"\r\n"
+    ).encode()
+
+
+def test_a_rejected_post_does_not_poison_the_next_request_on_the_connection(client):
+    """A pre-read rejection must not leave the JSON body as the next request line."""
+    body = b'{"through_id":"msg-1","delivery_token":"stale"}'
+    sock = socket.create_connection(("127.0.0.1", client.port), timeout=10)
+    try:
+        sock.sendall(_rejected_post(client, body) + _get_root(client))
+        status1, _, _, leftover = _read_http_response(sock)
+        assert status1 in (401, 403)
+        status2, _, body2, _ = _read_http_response(sock, leftover)
+        assert status2 == 200
+        assert status2 != 501
+        assert b"Unsupported method" not in body2
+    finally:
+        sock.close()
+
+
+def test_an_unread_body_over_the_drain_cap_closes_the_connection(client):
+    """Leftover bytes over the drain cap must close, not be parsed as a method."""
+    body = b"x" * (server.BODY_DRAIN_CAP + 1)
+    sock = socket.create_connection(("127.0.0.1", client.port), timeout=10)
+    try:
+        sock.sendall(_rejected_post(client, body))
+        status, headers, _, leftover = _read_http_response(sock)
+        assert status in (401, 403, 413)
+        assert headers.get(b"connection", b"").lower() == b"close"
+        rest = leftover
+        if not rest:
+            rest = sock.recv(16)
+        assert rest == b""
+    finally:
+        sock.close()
+
+
+def test_keep_alive_survives_a_small_rejected_post(client):
+    """A drained rejection leaves the connection reusable for the next request."""
+    body = b'{"through_id":"msg-1","delivery_token":"stale"}'
+    sock = socket.create_connection(("127.0.0.1", client.port), timeout=10)
+    try:
+        sock.sendall(_rejected_post(client, body))
+        status1, headers1, _, leftover = _read_http_response(sock)
+        assert status1 in (401, 403)
+        assert headers1.get(b"connection", b"").lower() != b"close"
+        sock.sendall(leftover + _get_root(client))
+        status2, _, body2, _ = _read_http_response(sock)
+        assert status2 == 200
+        assert b"Unsupported method" not in body2
+    finally:
+        sock.close()
+
+
+def _raw_rejected_post(client, body, headers):
+    lines = [
+        f"POST /api/channels/commons/send HTTP/1.1",
+        f"Host: 127.0.0.1:{client.port}",
+        f"Origin: http://127.0.0.1:{client.port}",
+        "Content-Type: application/json",
+        *headers,
+        "",
+        "",
+    ]
+    return "\r\n".join(lines).encode() + body
+
+
+def _assert_closed_not_poisoned(sock, client, *, statuses=(400, 401, 403)):
+    """The response must carry Connection: close and the socket must die clean."""
+    sock.sendall(_get_root(client))  # would be misparsed if leftovers poisoned
+    status, headers, _, leftover = _read_http_response(sock)
+    assert status in statuses
+    assert headers.get(b"connection", b"").lower() == b"close"
+    rest = leftover
+    if not rest:
+        rest = sock.recv(16)
+    assert rest == b""
+
+
+def test_conflicting_content_length_headers_close_the_connection(client):
+    """Two disagreeing Content-Length values make any drain length a lie."""
+    body = b'{"a":1}'
+    request = _raw_rejected_post(
+        client, body, ["Content-Length: 1", f"Content-Length: {len(body)}"]
+    )
+    sock = socket.create_connection(("127.0.0.1", client.port), timeout=10)
+    try:
+        sock.sendall(request)
+        _assert_closed_not_poisoned(sock, client)
+    finally:
+        sock.close()
+
+
+def test_a_lexically_loose_content_length_closes_the_connection(client):
+    """int() accepts "-0" as zero; a strict parser must refuse and close."""
+    body = b'{"a":1}'
+    request = _raw_rejected_post(client, body, ["Content-Length: -0"])
+    sock = socket.create_connection(("127.0.0.1", client.port), timeout=10)
+    try:
+        sock.sendall(request)
+        _assert_closed_not_poisoned(sock, client)
+    finally:
+        sock.close()
+
+
+def test_a_client_that_asked_to_close_is_not_drained(client):
+    """Connection: close on the request skips the drain and hangs up clean."""
+    body = b'{"through_id":"msg-1"}'
+    request = _raw_rejected_post(
+        client, body, [f"Content-Length: {len(body)}", "Connection: close"]
+    )
+    sock = socket.create_connection(("127.0.0.1", client.port), timeout=10)
+    try:
+        sock.sendall(request)
+        _assert_closed_not_poisoned(sock, client, statuses=(401, 403))
+    finally:
+        sock.close()
+
+
+def test_a_huge_digit_content_length_is_refused_not_crashed(client):
+    """4301+ digits pass isdigit() but blow int()'s conversion limit → must close."""
+    request = _raw_rejected_post(client, b"", ["Content-Length: " + "9" * 5000])
+    sock = socket.create_connection(("127.0.0.1", client.port), timeout=10)
+    try:
+        sock.sendall(request)
+        _assert_closed_not_poisoned(sock, client, statuses=(400, 401, 403))
+    finally:
+        sock.close()
+
+
+def test_a_drip_fed_body_cannot_outlive_the_drain_deadline(client, monkeypatch):
+    """One byte per interval must not extend the drain past its total budget."""
+    monkeypatch.setattr(server, "DRAIN_TOTAL_DEADLINE_S", 0.5)
+    request = _raw_rejected_post(client, b"", ["Content-Length: 4096"])
+    sock = socket.create_connection(("127.0.0.1", client.port), timeout=10)
+    try:
+        sock.sendall(request)
+        sock.settimeout(0.05)
+        start = time.monotonic()
+        data = b""
+        while b"\r\n\r\n" not in data and time.monotonic() - start < 4:
+            try:
+                sock.sendall(b"x")  # keep dripping: each byte resets a naive per-read timeout
+            except OSError:
+                pass
+            try:
+                chunk = sock.recv(65536)
+                if chunk:
+                    data += chunk
+            except TimeoutError:
+                pass
+            time.sleep(0.1)
+        elapsed = time.monotonic() - start
+        assert b"\r\n\r\n" in data, "server never responded while being drip-fed"
+        assert elapsed < 3, f"drain outlived its deadline: {elapsed:.1f}s"
+        assert int(data.split()[1]) in (401, 403)
+        assert b"connection: close" in data.lower()
+    finally:
+        sock.close()
+
+
+def test_a_truncated_body_never_reaches_route_logic(client, svc):
+    """A short body must 400 before the route can act on a partial payload."""
+    token = devices.create_pairing_token(svc.root)
+    payload = json.dumps({"one_time_token": token}).encode()
+    request = (
+        f"POST /api/pair HTTP/1.1\r\n"
+        f"Host: 127.0.0.1:{client.port}\r\n"
+        f"Origin: http://127.0.0.1:{client.port}\r\n"
+        f"Content-Type: application/json\r\n"
+        f"Content-Length: {len(payload) + 5}\r\n"
+        f"\r\n"
+    ).encode() + payload
+    sock = socket.create_connection(("127.0.0.1", client.port), timeout=10)
+    try:
+        sock.sendall(request)
+        sock.shutdown(socket.SHUT_WR)  # the missing 5 bytes never arrive
+        status, headers, body, _ = _read_http_response(sock)
+        assert status == 400
+        assert json.loads(body)["error"]["message"] == "request body was truncated"
+        assert headers.get(b"connection", b"").lower() == b"close"
+    finally:
+        sock.close()
+    # The complete-but-truncated-payload pairing must not have consumed the token.
+    replay = http.client.HTTPConnection("127.0.0.1", client.port, timeout=10)
+    try:
+        replay.request(
+            "POST",
+            "/api/pair",
+            body=json.dumps({"one_time_token": token}),
+            headers={
+                "Origin": f"http://127.0.0.1:{client.port}",
+                "Content-Type": "application/json",
+            },
+        )
+        response = replay.getresponse()
+        response.read()  # drain before close so the server sees a clean FIN
+        assert response.status == 200
+    finally:
+        replay.close()
 
 
 # ------------------------------------------------------------------ headers

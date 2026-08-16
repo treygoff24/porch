@@ -20,12 +20,7 @@ from porch3.verifycli import (
     EXIT_LOOKUP,
     EXIT_OK,
     EXIT_USAGE,
-    LookupIOError,
-    MessageNotFound,
-    SafeReadError,
-    held_read_channel_message,
-    verify_body_bytes,
-    _strip_msg_envelope,
+    verify_message_id,
 )
 from porch3.wire import DEFAULT_WIRE, WireFormat
 
@@ -76,7 +71,10 @@ class LiveVerifier:
 
     def consider(self, channel: str, msgs: list[dict]) -> None:
         for msg in msgs:
-            if not is_signed_msg(msg, wire=self.wire):
+            owner_room = getattr(self.porch_config, "owner_room", None)
+            if not is_signed_msg(
+                msg, wire=self.wire, owner_room=owner_room
+            ):
                 continue
             mid = msg["id"]
             with self._lock:
@@ -105,18 +103,9 @@ class LiveVerifier:
         if config is None:
             return None
         try:
-            raw = held_read_channel_message(
-                self.mail_root, channel, message_id
+            code, _msg = verify_message_id(
+                message_id, config=config, channel=channel
             )
-        except (MessageNotFound, FileNotFoundError):
-            # Corpus absence is EXIT_LOOKUP/UNKNOWN — not terminal False.
-            # Leave the id out of _verdicts so consider/verify_now can retry.
-            return None
-        except (LookupIOError, SafeReadError, OSError):
-            return None
-        body = _strip_msg_envelope(raw)
-        try:
-            code, _msg = verify_body_bytes(body, config=config)
         except Exception:
             return None
         if code == EXIT_OK:

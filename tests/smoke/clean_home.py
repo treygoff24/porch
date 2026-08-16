@@ -10,6 +10,7 @@ Run from a porch checkout whose HEAD is the release tree:
 
     python3 tests/smoke/clean_home.py
     python3 tests/smoke/clean_home.py --post-src /path/to/post
+    python3 tests/smoke/clean_home.py --post-src /path/to/post --post-ref HEAD
 
 Isolation: synthetic HOME under tempfile.mkdtemp. shutil.rmtree only on
 success; on failure the tree is preserved and its path is printed. No
@@ -84,6 +85,8 @@ class Harness:
     real_home: Path
     home: Path
     post_src: Path
+    post_ref: str
+    post_sha: str
     port: int
     results: list[StepResult] = field(default_factory=list)
     static_urls: list[str] = field(default_factory=list)
@@ -332,7 +335,7 @@ def free_port() -> int:
         return int(sock.getsockname()[1])
 
 
-def resolve_post_src(explicit: str | None) -> Path:
+def resolve_post_src(explicit: str | None, ref: str) -> tuple[Path, str]:
     if explicit:
         path = Path(explicit).expanduser().resolve()
     else:
@@ -347,19 +350,19 @@ def resolve_post_src(explicit: str | None) -> Path:
             f"post checkout not found at {path}; pass --post-src or set "
             "PORCH_SMOKE_POST_CHECKOUT"
         )
-    # Confirm the immutable release commit without mutating the checkout.
+    # Resolve the requested immutable commit without mutating the checkout.
     tip = subprocess.run(
-        ["git", "rev-parse", f"{POST_TAG}^{{commit}}"],
+        ["git", "rev-parse", f"{ref}^{{commit}}"],
         cwd=path,
         capture_output=True,
         text=True,
         check=True,
     ).stdout.strip()
-    if tip != POST_RELEASE_SHA:
+    if ref == POST_TAG and tip != POST_RELEASE_SHA:
         raise SystemExit(
             f"{path} {POST_TAG}^{{commit}} is {tip}, expected {POST_RELEASE_SHA}"
         )
-    return path
+    return path, tip
 
 
 def tool_versions(h: Harness) -> None:
@@ -993,19 +996,24 @@ def stage_b(h: Harness, wheel: Path) -> None:
 
 
 def stage_c(h: Harness) -> None:
-    # 7. Clone + build post at v0.4.1 (no worktree registration in claimed repo).
+    # Clone + build the resolved immutable Post commit (no worktree
+    # registration in the claimed repo). The default remains released v0.4.1;
+    # feature rollouts may explicitly pin a reviewed commit with --post-ref.
     h.run(
         [
             "git",
             "clone",
             "--no-local",
-            "--branch",
-            POST_TAG,
             h.post_src.resolve().as_uri(),
             str(h.post_clone),
         ],
-        title=f"git clone --no-local --branch {POST_TAG} post",
+        title="git clone --no-local post",
         timeout=300,
+    )
+    h.run(
+        ["git", "checkout", "--detach", h.post_sha],
+        title=f"git checkout reviewed Post ref {h.post_ref}",
+        cwd=h.post_clone,
     )
     tip = h.run(
         ["git", "rev-parse", "HEAD"],
@@ -1013,22 +1021,22 @@ def stage_c(h: Harness) -> None:
         cwd=h.post_clone,
     )
     clone_sha = (tip.stdout or "").strip()
-    number = h.next_step("assert post clone HEAD == released SHA")
-    print(f"$ test HEAD == {POST_RELEASE_SHA}", flush=True)
-    if clone_sha != POST_RELEASE_SHA:
+    number = h.next_step("assert post clone HEAD == resolved SHA")
+    print(f"$ test HEAD == {h.post_sha}", flush=True)
+    if clone_sha != h.post_sha:
         h.record(
             number,
-            "assert post clone HEAD == released SHA",
+            "assert post clone HEAD == resolved SHA",
             "git rev-parse HEAD",
             "FAIL",
             f"got {clone_sha}",
         )
         raise RuntimeError(
-            f"post clone HEAD {clone_sha} != released {POST_RELEASE_SHA}"
+            f"post clone HEAD {clone_sha} != resolved {h.post_sha}"
         )
     h.record(
         number,
-        "assert post clone HEAD == released SHA",
+        "assert post clone HEAD == resolved SHA",
         clone_sha,
         "PASS",
     )
@@ -1683,7 +1691,7 @@ def print_report(h: Harness) -> None:
     for name, ver in h.versions.items():
         print(f"  {name}: {ver}")
     print(f"  release tag: {RELEASE_TAG}")
-    print(f"  post tag: {POST_TAG}")
+    print(f"  post ref: {h.post_ref} ({h.post_sha})")
     print(f"  port: {h.port}")
     print(f"  temp root: {h.root}")
     print()
@@ -1719,8 +1727,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--post-src",
         default=None,
-        help="path to the post source checkout (tag v0.4.1). "
+        help="path to the post source checkout. "
         "Default: $PORCH_SMOKE_POST_CHECKOUT or sibling ../post",
+    )
+    parser.add_argument(
+        "--post-ref",
+        default=POST_TAG,
+        help=f"immutable Post ref to test (default: {POST_TAG})",
     )
     parser.add_argument(
         "--keep",
@@ -1734,7 +1747,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     real_home = Path.home().resolve()
-    post_src = resolve_post_src(args.post_src)
+    post_src, post_sha = resolve_post_src(args.post_src, args.post_ref)
     # Keep the tree short: ssh-agent AF_UNIX sockets under state/agent/<id>/agent.sock
     # must fit macOS's ~104-byte sun_path limit.
     root = Path(tempfile.mkdtemp(prefix="pch-", dir="/tmp"))
@@ -1745,6 +1758,8 @@ def main(argv: list[str] | None = None) -> int:
         real_home=real_home,
         home=home,
         post_src=post_src,
+        post_ref=args.post_ref,
+        post_sha=post_sha,
         port=free_port(),
     )
     # Pre-create pinned roots so resolve checks pass before mkdir races.
@@ -1766,6 +1781,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"temp root: {root}", flush=True)
     print(f"synthetic HOME: {home}", flush=True)
     print(f"post src: {post_src}", flush=True)
+    print(f"post ref: {args.post_ref} ({post_sha})", flush=True)
     print(f"isolated port: {h.port}", flush=True)
 
     ok = False

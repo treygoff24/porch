@@ -207,7 +207,7 @@ class BorrowedSendTest(unittest.TestCase):
             from porch3.send import SendResult
 
             def fake_send(channel, body, **kwargs):
-                sent.append((channel, body))
+                sent.append((channel, body, kwargs))
                 return SendResult(ok=True, message="sent")
 
             with patch.object(
@@ -219,7 +219,9 @@ class BorrowedSendTest(unittest.TestCase):
 
             self.assertTrue(result.ok)
             self.assertEqual(len(sent), 1)
-            self.assertIn("[signed:", sent[0][1])
+            self.assertEqual(sent[0][1], "while armed")
+            self.assertTrue(sent[0][2]["raw"])
+            self.assertRegex(sent[0][2]["signature_ref"], r"^[0-9A-Za-z-]+$")
 
     def test_private_signer_path_is_unaffected_by_the_lease_check(self):
         """No lease → no re-check, the owned-agent path is untouched."""

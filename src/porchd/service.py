@@ -228,8 +228,10 @@ class Service:
         for msg in fresh:
             if msg.get("from") != self.porch_config.owner_room:
                 continue
-            parsed = drstore.parse_action_body(
-                msg.get("body") or "", wire=self.porch_config.wire
+            parsed = drstore.parse_observed_action(
+                msg,
+                owner_room=self.porch_config.owner_room,
+                wire=self.porch_config.wire,
             )
             if parsed is None:
                 continue

@@ -3,11 +3,17 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
 
+from helpers import make_porch_config
 from porch3 import drstore
+from porch3.signature_v2 import manifest_bytes
+
+_DEFAULT_LOCATOR = object()
 
 
 def _tmp_log(tmp: str) -> Path:
@@ -22,6 +28,90 @@ def _put_channel_msg(
     store.mkdir(parents=True, exist_ok=True)
     path = store / f"{mid}.msg"
     path.write_text(body if isinstance(body, str) else body.decode())
+    return path
+
+
+def _install_v2_identity(config, root: Path) -> Path:
+    config.sigs_dir.mkdir(parents=True, exist_ok=True)
+    key = root / "v2-test-key"
+    subprocess.run(
+        [
+            "ssh-keygen",
+            "-t",
+            "ed25519",
+            "-f",
+            str(key),
+            "-C",
+            config.principal,
+            "-N",
+            "",
+            "-q",
+        ],
+        check=True,
+        capture_output=True,
+    )
+    algorithm, public_key, *_ = Path(f"{key}.pub").read_text().split()
+    config.allowed_signers.write_text(
+        f'{config.principal} namespaces="{config.signing_namespace}" '
+        f"{algorithm} {public_key}\n"
+    )
+    os.chmod(config.allowed_signers, 0o600)
+    return key
+
+
+def _write_signed_v2(
+    config,
+    key: Path,
+    *,
+    mid: str,
+    tag: str,
+    body: str,
+    storage_channel: str = "commons",
+    envelope_channel: str = "commons",
+    signed_channel: str = "commons",
+    signed_body: str | None = None,
+    signature_ref=_DEFAULT_LOCATOR,
+) -> Path:
+    payload = manifest_bytes(
+        tag,
+        signed_channel,
+        body if signed_body is None else signed_body,
+    )
+    payload_path = config.sigs_dir / f"{tag}.txt"
+    payload_path.write_bytes(payload)
+    subprocess.run(
+        [
+            "ssh-keygen",
+            "-Y",
+            "sign",
+            "-f",
+            str(key),
+            "-n",
+            config.signing_namespace,
+            str(payload_path),
+        ],
+        check=True,
+        capture_output=True,
+        input=b"\n",
+    )
+    envelope = {
+        "id": mid,
+        "from": config.owner_room,
+        "channel": envelope_channel,
+        "sent": "2025-01-11 18:00:00 -0500",
+        "signature_ref": (
+            {"version": 2, "tag": tag}
+            if signature_ref is _DEFAULT_LOCATOR
+            else signature_ref
+        ),
+    }
+    path = config.channels_dir / storage_channel / "messages" / f"{mid}.msg"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(
+        json.dumps(envelope, separators=(",", ":")).encode()
+        + b"\n---\n"
+        + body.encode()
+    )
     return path
 
 
@@ -198,6 +288,52 @@ class DrStoreTest(unittest.TestCase):
             "",
         ):
             self.assertIsNone(drstore.parse_action_body(bad), bad)
+
+    def test_v2_action_body_parse_is_exact_and_undecorated(self):
+        self.assertEqual(
+            drstore.parse_v2_action_body("⚖️ DR dr-7 accepted"),
+            ("dr-7", "accepted", None),
+        )
+        self.assertEqual(
+            drstore.parse_v2_action_body("⚖️ DR dr-4 superseded by dr-9"),
+            ("dr-4", "superseded", "dr-9"),
+        )
+        for bad in (
+            " ⚖️ DR dr-7 accepted",
+            "⚖️ DR dr-7 accepted ",
+            "⚖️ DR dr-7 accepted\n",
+            "⚖️ DR dr-7 accepted\r",
+            "quoted: ⚖️ DR dr-7 accepted",
+            "⚖️ DR dr-7 accepted\nextra",
+            "🦊🔏 ⚖️ DR dr-7 accepted [signed:x]",
+            "",
+        ):
+            self.assertIsNone(drstore.parse_v2_action_body(bad), bad)
+
+    def test_live_action_parser_selects_from_locator_presence(self):
+        v2 = {
+            "from": "mara",
+            "body": "⚖️ DR dr-7 rejected",
+            "signature_ref_present": True,
+            "signature_ref": None,
+        }
+        self.assertEqual(
+            drstore.parse_observed_action(v2, owner_room="mara"),
+            ("dr-7", "rejected", None),
+        )
+        self.assertIsNone(
+            drstore.parse_observed_action(
+                dict(v2, **{"from": "mallory"}), owner_room="mara"
+            )
+        )
+        # A present v2 locator never falls back to decorated v1 parsing.
+        copied_v1 = dict(
+            v2,
+            body="🦊🔏 ⚖️ DR dr-7 accepted [signed:x]",
+        )
+        self.assertIsNone(
+            drstore.parse_observed_action(copied_v1, owner_room="mara")
+        )
 
     def test_concurrent_proposals_get_distinct_ids(self):
         # Review major: id allocation outside the flock collided 10/10.
@@ -525,6 +661,105 @@ class SupersedeChainAndRejectedTest(unittest.TestCase):
             r = drstore.project(drstore.replay(log), verifier=self._ratify_all)
             self.assertEqual(r["dr-1"]["state"], "ratified")
             self.assertNotIn("superseded_by", r["dr-1"])
+
+
+class V2AuthenticActionTest(unittest.TestCase):
+    def setUp(self):
+        drstore._ACTION_MEMO.clear()
+        drstore._BUDGET_CHARGED.clear()
+        drstore._TIMEOUT_BACKOFF.clear()
+
+    def tearDown(self):
+        drstore._ACTION_MEMO.clear()
+        drstore._BUDGET_CHARGED.clear()
+        drstore._TIMEOUT_BACKOFF.clear()
+
+    def test_full_message_verification_precedes_exact_v2_action_parse(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config = make_porch_config(root, owner_room="mara", marker="🦊")
+            key = _install_v2_identity(config, root)
+
+            valid_mid = "20250111-180000-000001-abcdef"
+            _write_signed_v2(
+                config,
+                key,
+                mid=valid_mid,
+                tag="20250111T180001Z",
+                body="⚖️ DR dr-7 accepted",
+            )
+            self.assertEqual(
+                drstore.authentic_action(
+                    valid_mid, mail_root=config.mail_root, config=config
+                ),
+                ("dr-7", "accepted", None),
+            )
+
+            # A genuinely signed body that merely contains an action is not an
+            # action instrument: the entire undecorated v2 body must match.
+            quoted_mid = "20250111-180000-000002-abcdef"
+            _write_signed_v2(
+                config,
+                key,
+                mid=quoted_mid,
+                tag="20250111T180002Z",
+                body='context says "⚖️ DR dr-7 accepted"',
+            )
+            self.assertIsNone(
+                drstore.authentic_action(
+                    quoted_mid, mail_root=config.mail_root, config=config
+                )
+            )
+
+            # Mutating the stored body after signing fails before action parse.
+            mutated_mid = "20250111-180000-000003-abcdef"
+            _write_signed_v2(
+                config,
+                key,
+                mid=mutated_mid,
+                tag="20250111T180003Z",
+                body="⚖️ DR dr-7 rejected",
+                signed_body="⚖️ DR dr-7 accepted",
+            )
+            self.assertIsNone(
+                drstore.authentic_action(
+                    mutated_mid, mail_root=config.mail_root, config=config
+                )
+            )
+
+            # The actual storage directory, not the envelope, binds authority.
+            moved_mid = "20250111-180000-000004-abcdef"
+            _write_signed_v2(
+                config,
+                key,
+                mid=moved_mid,
+                tag="20250111T180004Z",
+                body="⚖️ DR dr-7 accepted",
+                storage_channel="planted",
+                envelope_channel="commons",
+                signed_channel="commons",
+            )
+            self.assertIsNone(
+                drstore.authentic_action(
+                    moved_mid, mail_root=config.mail_root, config=config
+                )
+            )
+
+            # A present malformed locator selects v2 and never falls back.
+            malformed_mid = "20250111-180000-000005-abcdef"
+            _write_signed_v2(
+                config,
+                key,
+                mid=malformed_mid,
+                tag="20250111T180005Z",
+                body="⚖️ DR dr-7 accepted",
+                signature_ref=None,
+            )
+            self.assertIsNone(
+                drstore.authentic_action(
+                    malformed_mid, mail_root=config.mail_root, config=config
+                )
+            )
 
 
 class TimeoutCandidateTest(unittest.TestCase):
@@ -966,7 +1201,7 @@ class MissingThenPresentLookupTest(unittest.TestCase):
         mid = "20250111-180000-000001-abcdef"
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            real_held = vc.held_read_unique_message
+            real_held = vc.held_read_unique_message_record
             held_calls = []
             present = [False]
 
@@ -978,7 +1213,7 @@ class MissingThenPresentLookupTest(unittest.TestCase):
 
             clock = [0.0]
             with mock.patch.object(drstore, "_now", lambda: clock[0]), \
-                 mock.patch.object(vc, "held_read_unique_message", held), \
+                 mock.patch.object(vc, "held_read_unique_message_record", held), \
                  mock.patch.object(
                      vc, "verify_body_bytes",
                      return_value=(vc.EXIT_OK, "VERIFIED"),
@@ -1034,7 +1269,7 @@ class AmbiguityGlobFloodTest(unittest.TestCase):
                 drstore.decide("dr-1", "ratified", mid, path=log)
 
             lookup_calls = []
-            real_held = vc.held_read_unique_message
+            real_held = vc.held_read_unique_message_record
 
             def counting_held(mail_root, message_id, **kw):
                 lookup_calls.append(message_id)
@@ -1044,7 +1279,9 @@ class AmbiguityGlobFloodTest(unittest.TestCase):
 
             with mock.patch.object(drstore, "MAIL_ROOT", root), \
                  mock.patch.object(drstore, "_now", lambda: clock[0]), \
-                 mock.patch.object(vc, "held_read_unique_message", counting_held), \
+                 mock.patch.object(
+                     vc, "held_read_unique_message_record", counting_held
+                 ), \
                  mock.patch.object(
                      vc, "verify_body_bytes",
                      return_value=(vc.EXIT_OK, "VERIFIED"),
@@ -1087,7 +1324,7 @@ class TransientIOErrorTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             _put_channel_msg(root, mid, self.GENUINE)
-            real_held = vc.held_read_unique_message
+            real_held = vc.held_read_unique_message_record
             flaky = [True]
 
             def flaky_held(mail_root, message_id, **kw):
@@ -1097,7 +1334,9 @@ class TransientIOErrorTest(unittest.TestCase):
 
             clock = [0.0]
             with mock.patch.object(drstore, "_now", lambda: clock[0]), \
-                 mock.patch.object(vc, "held_read_unique_message", flaky_held), \
+                 mock.patch.object(
+                     vc, "held_read_unique_message_record", flaky_held
+                 ), \
                  mock.patch.object(
                      vc, "verify_body_bytes",
                      return_value=self._verified_body(),
@@ -1123,7 +1362,7 @@ class TransientIOErrorTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             _put_channel_msg(root, mid, self.GENUINE)
-            real_held = vc.held_read_unique_message
+            real_held = vc.held_read_unique_message_record
             flaky = [True]
 
             def flaky_held(mail_root, message_id, **kw):
@@ -1133,7 +1372,9 @@ class TransientIOErrorTest(unittest.TestCase):
 
             clock = [0.0]
             with mock.patch.object(drstore, "_now", lambda: clock[0]), \
-                 mock.patch.object(vc, "held_read_unique_message", flaky_held), \
+                 mock.patch.object(
+                     vc, "held_read_unique_message_record", flaky_held
+                 ), \
                  mock.patch.object(
                      vc, "verify_body_bytes",
                      return_value=self._verified_body(),

@@ -10,7 +10,9 @@ from pathlib import Path
 import pytest
 from conftest import make_id, make_porch_config
 
+from porch3 import signer as signer_mod
 from porch3.send import SendResult
+from porch3.signature_v2 import MAX_SIGNED_BODY_BYTES
 from porchd import imagesvc, lease, ledger, policy, tokens
 from porchd import service as service_mod
 from porchd.service import ApiError
@@ -33,10 +35,11 @@ def _dispatch(text, **kw):
 
 
 def test_plain_text_is_its_own_wire():
-    wire = _dispatch("hey finch")
+    draft = " \tfirst\r\n\rsecond\n\u2028👩‍🚀🦊🔏 [signed:BAIT]\t\n"
+    wire = _dispatch(draft)
     assert isinstance(wire, policy.Wire)
-    assert wire.body == "hey finch"
-    assert wire.wire_hash == policy.wire_hash("hey finch")
+    assert wire.body == draft
+    assert wire.wire_hash == policy.wire_hash(draft)
 
 
 def test_vote_is_transformed_server_side():
@@ -93,6 +96,52 @@ def test_supersede_mirrors_the_projection_preconditions():
     wire = _dispatch("/supersede dr-1 dr-2", dr_records=records,
                      intent="signed", armed=True)
     assert wire.body == "⚖️ DR dr-1 superseded by dr-2"
+
+
+def test_service_observes_only_exact_v2_dr_action(svc, monkeypatch):
+    from porch3 import drstore
+
+    log = svc.porch_config.dr_log_path
+    action_id = "20250110-184799-000000-abcdef"
+    drstore.propose(
+        title="v2",
+        project="p",
+        channel="commons",
+        anchor_message_id="anchor-v2",
+        path=log,
+    )
+    monkeypatch.setattr(
+        drstore,
+        "authentic_action",
+        lambda mid, mail_root=None, **kw: (
+            ("dr-1", "accepted", None) if mid == action_id else None
+        ),
+    )
+    svc.reload_dr()
+    base = {
+        "from": svc.porch_config.owner_room,
+        "channel": "commons",
+        "signature_ref_present": True,
+        "signature_ref": {"version": 2, "tag": "ACTION"},
+    }
+    svc._observe_dr_actions(
+        [
+            {
+                **base,
+                "id": "20250110-184798-000000-abcdef",
+                "body": "quoted\n⚖️ DR dr-1 accepted",
+            }
+        ]
+    )
+    assert not drstore.has_actor_event(
+        drstore.replay(log), "20250110-184798-000000-abcdef"
+    )
+
+    svc._observe_dr_actions(
+        [{**base, "id": action_id, "body": "⚖️ DR dr-1 accepted"}]
+    )
+    assert svc._dr_records["dr-1"]["state"] == "ratified"
+    assert svc._dr_records["dr-1"]["actor_message_id"] == action_id
 
 
 def test_attachment_paths_are_appended_by_the_server():
@@ -194,6 +243,15 @@ def test_send_records_the_wire_and_returns_the_message_id(svc, ok_send):
     assert result["ok"] and result["state"] == "sent"
     assert ok_send[0]["text"] == "hey"
     assert ledger.latest(svc.root, "s1")["state"] == ledger.SENT
+
+
+def test_unsigned_multiline_is_sent_unchanged(svc, ok_send):
+    multiline = "line one\nline two"
+    result = svc.send(
+        "dev1", "commons", {"attempt_id": "s1", "draft_text": multiline}
+    )
+    assert result["ok"] is True
+    assert ok_send[0]["text"] == multiline
 
 
 def test_a_replayed_send_never_re_invokes_post(svc, ok_send):
@@ -412,6 +470,19 @@ def test_message_json_sanitizes_after_policy(svc, add_msg):
     assert message["body"][span["start"]:span["end"]] == "@mara"
     assert span["owner"] is True
     assert message["mentions_owner"] is True
+
+
+def test_message_json_never_strips_authored_v2_marker_bait(svc, add_msg):
+    body = "\n🦊🔏 authored [signed:BAIT]\n"
+    add_msg(
+        "commons",
+        2,
+        "mara",
+        body,
+        signature_ref={"version": 2, "tag": "BAIT"},
+    )
+    message = _page(svc)["messages"][0]
+    assert message["body"] == body
 
 
 def test_day_separators_and_sender_labels(svc, add_msg):
@@ -911,6 +982,60 @@ def test_signed_send_refuses_when_the_socket_vanishes_after_precheck(svc, monkey
     assert response["clear_draft"] is False
     assert response["error"]["code"] == "sign_failed"
     assert ledger.latest(svc.root, "s1")["state"] == ledger.REFUSED
+
+
+def test_signed_multiline_preserves_the_exact_mobile_body(svc, monkeypatch):
+    multiline = " \tfirst\r\n\rsecond\n\u2028👩‍🚀🦊🔏 [signed:BAIT]\t\n"
+    monkeypatch.setattr(lease, "is_armed", lambda root: True)
+    monkeypatch.setattr(
+        lease, "agent_env", lambda root: {"SSH_AUTH_SOCK": "/dev/null"}
+    )
+
+    captured = []
+
+    def signed_send(self, channel, text, **kwargs):
+        captured.append(text)
+        return SendResult(ok=True, message="sent", raw={"message": {"id": "m1"}})
+
+    monkeypatch.setattr(signer_mod.Signer, "sign_and_send", signed_send)
+
+    response = svc.send(
+        "dev1",
+        "commons",
+        {"attempt_id": "s1", "draft_text": multiline, "intent": "signed"},
+    )
+
+    assert response["ok"] is True
+    assert response["clear_draft"] is True
+    assert captured == [multiline]
+    assert ledger.latest(svc.root, "s1")["state"] == ledger.SENT
+
+
+def test_signed_over_cap_keeps_the_mobile_draft_without_io(svc, monkeypatch):
+    draft = "x" * (MAX_SIGNED_BODY_BYTES + 1)
+    monkeypatch.setattr(lease, "is_armed", lambda root: True)
+    monkeypatch.setattr(
+        lease, "agent_env", lambda root: {"SSH_AUTH_SOCK": "/dev/null"}
+    )
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("over-cap refusal must precede sidecars and processes")
+
+    monkeypatch.setattr(signer_mod, "_create_payload", forbidden)
+    monkeypatch.setattr(signer_mod.subprocess, "run", forbidden)
+    monkeypatch.setattr(signer_mod, "send_as_owner", forbidden)
+    response = svc.send(
+        "dev1",
+        "commons",
+        {"attempt_id": "over", "draft_text": draft, "intent": "signed"},
+    )
+
+    assert response["ok"] is False
+    assert response["state"] == ledger.REFUSED
+    assert response["clear_draft"] is False
+    assert response["error"]["code"] == "sign_failed"
+    assert "1,048,576-byte limit" in response["error"]["message"]
+    assert not svc.porch_config.sigs_dir.exists()
 
 
 def test_the_reveal_denylist_covers_secrets_state_and_the_mail_corpus(svc, tmp_path):

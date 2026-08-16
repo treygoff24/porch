@@ -18,15 +18,16 @@ def parse_msg(path: Path) -> dict | None:
     fields (`id`/`from`/`sent` as str), and `id == filename stem`.
     """
     try:
-        raw = path.read_text(errors="replace")
+        raw = path.read_bytes()
     except OSError:
         return None
-    if "\n---\n" not in raw:
+    separator = b"\n---\n"
+    if separator not in raw:
         return None
-    head, _, body = raw.partition("\n---\n")
+    head_bytes, _, body_bytes = raw.partition(separator)
     try:
-        meta = json.loads(head)
-    except ValueError:
+        meta = json.loads(head_bytes.decode("utf-8", errors="strict"))
+    except (UnicodeDecodeError, ValueError):
         return None
     if not isinstance(meta, dict):
         return None
@@ -37,6 +38,8 @@ def parse_msg(path: Path) -> dict | None:
         return None
     if mid != path.stem:
         return None
+    body = body_bytes.decode("utf-8", errors="replace")
+    signature_ref_present = "signature_ref" in meta
     mentions = meta.get("mentions") or []
     if not isinstance(mentions, list):
         mentions = []
@@ -52,7 +55,14 @@ def parse_msg(path: Path) -> dict | None:
         "pfp": meta.get("pfp") if isinstance(meta.get("pfp"), str) else None,
         "re": meta.get("re") if isinstance(meta.get("re"), str) else None,
         "mentions": mentions,
-        "body": body.strip(),
+        # A present locator is sender data, not authority, but it tells the UI
+        # that decoration stripping would corrupt a possible v2 body. The full
+        # verifier independently decides whether the locator has authority.
+        "body": body if signature_ref_present else body.strip(),
+        "signature_ref_present": signature_ref_present,
+        "signature_ref": meta.get("signature_ref"),
+        "storage_channel": path.parent.parent.name,
+        "envelope_channel": meta.get("channel"),
         "stem": path.stem,
     }
 
@@ -139,6 +149,15 @@ def clean_body(body: str, *, wire: WireFormat = DEFAULT_WIRE) -> str:
     return wire.strip(body)
 
 
+def clean_message_body(msg: dict, *, wire: WireFormat = DEFAULT_WIRE) -> str:
+    """Return a display body without interpreting v2 content as decoration."""
+    body = msg.get("body") or ""
+    present = bool(
+        msg.get("signature_ref_present", "signature_ref" in msg)
+    )
+    return body if present else clean_body(body, wire=wire)
+
+
 def fmt_time(sent: str) -> str:
     # sent is store data — sanitize here so every header/preview consumer
     # inherits the terminal-control boundary.
@@ -159,7 +178,7 @@ def channel_preview(channel: str, root: Path) -> tuple[str, str, str]:
             break
     if not msg:
         return ("--:--", "—", "No messages yet")
-    preview = " ".join(clean_body(msg["body"]).split()) or "(empty)"
+    preview = " ".join(clean_message_body(msg).split()) or "(empty)"
     return (
         fmt_time(msg["sent"]),
         sanitize_display(msg["from"]),
@@ -231,8 +250,9 @@ def reply_preview_line(msg: dict, by_id: dict[str, dict]) -> str | None:
     sid = sanitize_display(short_id(re_id))
     if parent is None:
         return f"↳ re {sid}"
-    preview = " ".join(clean_body(parent["body"]).split())[:40]
-    if len(" ".join(clean_body(parent["body"]).split())) > 40:
+    clean_parent = clean_message_body(parent)
+    preview = " ".join(clean_parent.split())[:40]
+    if len(" ".join(clean_parent.split())) > 40:
         preview = preview.rstrip() + "…"
     return sanitize_display(
         f"↳ re {sid} ({parent['from']}: {preview})"

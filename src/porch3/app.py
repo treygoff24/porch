@@ -460,16 +460,17 @@ class PorchApp(App):
     def on_composer_submitted(self, event: Composer.Submitted) -> None:
         bounce = self.query_one("#bounce", BounceBanner)
         composer = self.query_one("#composer", Composer)
-        current = composer.text.strip()
+        current_raw = composer.text
+        current = current_raw.strip()
 
         if bounce.active:
             # Compare against what the composer DISPLAYED at bounce time, not
             # the expanded wire text — an unchanged /vote or /img must resend
             # its wire body with --anyway, never the raw slash command.
-            pending_display = (self._pending_display or "").strip()
+            pending_display = self._pending_display or ""
             wire = self._pending_text
             bounce.hide()
-            if current == pending_display and wire:
+            if current_raw == pending_display and wire:
                 self._do_send(wire, anyway=True)
                 return
             # Edited while the banner was up — dismiss and run the normal
@@ -549,8 +550,10 @@ class PorchApp(App):
         for m in fresh:
             if m.get("from") != self.porch_config.owner_room:
                 continue
-            parsed = drstore.parse_action_body(
-                m.get("body") or "", wire=self.porch_config.wire
+            parsed = drstore.parse_observed_action(
+                m,
+                owner_room=self.porch_config.owner_room,
+                wire=self.porch_config.wire,
             )
             if parsed is None:
                 continue
@@ -771,7 +774,7 @@ class PorchApp(App):
 
         # Keep draft until send succeeds (bounce must preserve it)
         self.drafts[self.current] = raw
-        self._do_send(text)
+        self._do_send(raw)
 
     def _do_send(self, text: str, *, anyway: bool = False) -> None:
         composer = self.query_one("#composer", Composer)
