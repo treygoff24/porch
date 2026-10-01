@@ -1,0 +1,17 @@
+{
+  "name": "@estate/post-kit",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Post access, signing, verification, drafts and send records. No UI dependencies.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@estate/pixel": "workspace:*",
+    "tsx": "4.23.15"
+  },
+  "bin": {
+    "porch-verify": "./bin/porch-verify"
+  }
+}

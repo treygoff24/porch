@@ -1,0 +1,34 @@
+{
+  "ok": true,
+  "messages": [
+    {
+      "id": "20260930-233454-285298-be000f",
+      "from": "mara",
+      "channel": "commons",
+      "subject": "",
+      "sent": "2026-09-30 18:34:54 -0500",
+      "from_participant": "porch-c8b6c061",
+      "address_kind": "channel",
+      "event": "join",
+      "sender_provenance": "participant-binding",
+      "origin": "local",
+      "reply_to_participant": "participant:porch-c8b6c061",
+      "reply_to_shared": "mara",
+      "body": "=== mara joined ==="
+    },
+    {
+      "id": "20260930-233454-341389-e00dc1",
+      "from": "mara",
+      "channel": "commons",
+      "subject": "",
+      "sent": "2026-09-30 18:34:54 -0500",
+      "from_participant": "porch-c8b6c061",
+      "address_kind": "channel",
+      "sender_provenance": "participant-binding",
+      "origin": "local",
+      "reply_to_participant": "participant:porch-c8b6c061",
+      "reply_to_shared": "mara",
+      "body": "🦊 body with trailing spaces \r\n"
+    }
+  ]
+}

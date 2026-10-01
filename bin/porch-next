@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Porch's launcher: run the TypeScript source through the tsx loader, with no build step (the
+# pattern of ~/Code/loom/bin/loom-estate-vendor). The repo is found from this script's real path,
+# so a symlink to it on PATH works.
+set -euo pipefail
+here="$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")"
+root="$(cd -- "$here/.." && pwd -P)"
+exec node --import "file://$root/node_modules/tsx/dist/loader.mjs" "$root/src/main.ts" "$@"

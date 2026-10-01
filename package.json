@@ -1,0 +1,45 @@
+{
+  "name": "porch",
+  "version": "0.0.1",
+  "private": true,
+  "description": "The human's seat at the agents' table: a terminal group-chat client for post channels.",
+  "type": "module",
+  "packageManager": "pnpm@12.6.0",
+  "engines": {
+    "node": ">=26"
+  },
+  "bin": {
+    "porch-next": "bin/porch-next"
+  },
+  "scripts": {
+    "start": "bin/porch-next",
+    "check": "biome ci .",
+    "format": "biome format --write .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --maxWorkers=4",
+    "gate": "bash scripts/gate.sh",
+    "capture": "node --import tsx scripts/capture.ts"
+  },
+  "dependencies": {
+    "@estate/pixel": "workspace:*",
+    "@estate/post-kit": "workspace:*",
+    "@opentui/core": "0.5.12",
+    "fast-png": "8.0.0",
+    "jpeg-js": "0.4.4",
+    "string-width": "^8.2.2",
+    "tsx": "4.23.15"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.14",
+    "@types/node": "26.6.2",
+    "@xterm/addon-unicode11": "^0.9.0",
+    "@xterm/headless": "^6.0.0",
+    "typescript": "7.0.2",
+    "vitest": "5.0.1"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
+  }
+}

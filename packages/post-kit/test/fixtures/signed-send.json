@@ -1,0 +1,14 @@
+{
+  "id": "20260930-233454-788204-81c380",
+  "from": "mara",
+  "channel": "commons",
+  "subject": "",
+  "sent": "2026-09-30 18:34:54 -0500",
+  "from_participant": "porch-c8b6c061",
+  "address_kind": "channel",
+  "signature_ref": {
+    "tag": "20260930T233454Z",
+    "version": 2
+  },
+  "sender_provenance": "participant-binding"
+}

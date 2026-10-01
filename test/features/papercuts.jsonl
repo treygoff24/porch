@@ -1,0 +1,1 @@
+{"kind":"cut","id":"pc2_b0e3a0e6eb9c42c3","ts":"2026-10-01T04:22:53.196Z","agent":"codex","text":"Delegate single-run JSON has assistantText at the top level; the T8 review brief supplied jq .runs[0].assistantText, which returns null. Generate the extraction command from the actual run JSON shape.","tags":["delegate"],"severity":"minor","cwd":".","repo":null}

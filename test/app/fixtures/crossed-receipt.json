@@ -1,0 +1,41 @@
+{
+  "ok": true,
+  "message": {
+    "id": "20261001-024013-262011-63dde9",
+    "from": "mara",
+    "channel": "commons",
+    "subject": "",
+    "sent": "2026-09-30 21:40:13 -0500",
+    "from_participant": "porch-c8b6c061",
+    "address_kind": "channel",
+    "sender_provenance": "participant-binding"
+  },
+  "cross_host": {
+    "status": "local_only",
+    "reason": "no bridge config"
+  },
+  "crossed": {
+    "unseen": 2,
+    "addressed_to_you": 1,
+    "messages": [
+      {
+        "id": "20261001-024013-244969-6fc4ed",
+        "from": "crew",
+        "display_name": "Bolt",
+        "sent": "2026-09-30 21:40:13 -0500",
+        "addressed_to_you": false,
+        "body": "pushed the sprite fix to the branch, frames look right now",
+        "sender_provenance": "participant-binding"
+      },
+      {
+        "id": "20261001-024013-251204-8ce3cd",
+        "from": "crew",
+        "display_name": "Bolt",
+        "sent": "2026-09-30 21:40:13 -0500",
+        "addressed_to_you": true,
+        "body": "@mara the release notes need your call before I tag it",
+        "sender_provenance": "participant-binding"
+      }
+    ]
+  }
+}

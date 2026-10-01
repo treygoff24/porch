@@ -1,0 +1,238 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-10-01T00:00:00Z",
+  "title": "Design System: Porch",
+  "extensions": {
+    "notes": [
+      "Platform is a terminal: sizes are cells (1 col x 1 row) and half-block pixels (2 px per row). No CSS radius or shadow exists in the build.",
+      "Hex values are copied exactly from src/app/theme.ts (K), src/app/stage/theme.ts (T), src/grid/color.ts and packages/pixel/src/palette.ts. The feature renderers (src/app/features/*.ts) draw with K tokens, not literals. No tonal ramps are given: the source defines none, and synthesising them would invent colours.",
+      "Captures (.impeccable/review/*.png) are rendered at 9x18 px per cell, 15 px font: phone 40x52, laptop 100x32, wide 160x44 cells.",
+      "T.panel #0d1319 is declared in src/app/stage/theme.ts but never drawn; it is not a token."
+    ],
+    "colorMeta": {
+      "glass": { "role": "neutral", "displayName": "Cabinet Glass", "canonical": "#05080b", "source": "K.glass / T.glass" },
+      "scan": { "role": "neutral", "displayName": "Scanline", "canonical": "#0a0f14", "source": "K.scan / T.scan" },
+      "bezel": { "role": "neutral", "displayName": "Bezel", "canonical": "#1d2227", "source": "K.bezel / T.bezel" },
+      "bezel-hi": { "role": "neutral", "displayName": "Bezel Highlight", "canonical": "#2b3238", "source": "K.bezelHi / T.bezelHi" },
+      "deep": { "role": "neutral", "displayName": "Deep Indigo", "canonical": "#14184a", "source": "T.deep" },
+      "data": { "role": "neutral", "displayName": "Data", "canonical": "#dfe6ea", "source": "K.data / T.data / grid DEFAULT_INK" },
+      "white": { "role": "neutral", "displayName": "White", "canonical": "#eef2f4", "source": "T.white" },
+      "gray": { "role": "neutral", "displayName": "Meta Gray", "canonical": "#8f9aa2", "source": "K.gray / T.gray" },
+      "gray-dim": { "role": "neutral", "displayName": "Dim Gray", "canonical": "#434d56", "source": "K.grayDim / T.grayDim" },
+      "you-bg": { "role": "primary", "displayName": "Behind-Trey Teal", "canonical": "#123440", "source": "K.youBg / T.youBg" },
+      "cyan": { "role": "primary", "displayName": "Trey Cyan", "canonical": "#3fd9f2", "source": "K.cyan / T.cyan" },
+      "green": { "role": "secondary", "displayName": "Ready Green", "canonical": "#3ee56d", "source": "K.green / T.green" },
+      "magenta": { "role": "secondary", "displayName": "Headed Magenta", "canonical": "#ff5bdc", "source": "K.magenta / T.magenta" },
+      "red": { "role": "secondary", "displayName": "Warning Red", "canonical": "#ff3d32", "source": "K.red / T.red" },
+      "violet": { "role": "secondary", "displayName": "Unread Violet", "canonical": "#cd8bff", "source": "K.violet / T.violet" },
+      "gold": { "role": "tertiary", "displayName": "Power Gold", "canonical": "#ffc400", "source": "K.gold / T.gold" },
+      "flash": { "role": "tertiary", "displayName": "Flash White", "canonical": "#fff6d8", "source": "K.flash / T.flash" },
+      "orange": { "role": "tertiary", "displayName": "Sunset Orange", "canonical": "#ff8a2a", "source": "T.orange (TITLE_ROWS[0])" },
+      "pink": { "role": "tertiary", "displayName": "Sunset Pink", "canonical": "#ff9ec8", "source": "T.pink (TITLE_ROWS[1])" },
+      "blue": { "role": "tertiary", "displayName": "Arcade Blue", "canonical": "#3c5cf0", "source": "T.blue (TITLE_ROWS[4])" },
+      "mono-dark": { "role": "neutral", "displayName": "NO_COLOR Dark", "canonical": "#000000", "source": "grid/color.ts MONO_DARK" },
+      "mono-light": { "role": "neutral", "displayName": "NO_COLOR Light", "canonical": "#d8d8d8", "source": "grid/color.ts MONO_LIGHT" },
+      "sprite-0-ink": { "role": "sprite", "displayName": "ink: outlines, eyes", "canonical": "#0b0e14" },
+      "sprite-1-night": { "role": "sprite", "displayName": "night: deep shade", "canonical": "#1f2d52" },
+      "sprite-2-steel": { "role": "sprite", "displayName": "steel", "canonical": "#6e7a88" },
+      "sprite-3-pale": { "role": "sprite", "displayName": "pale: highlights; the lit value of NO_COLOR line work", "canonical": "#d8dfe5" },
+      "sprite-4-blue": { "role": "sprite", "displayName": "blue: arcade blue", "canonical": "#3c5cf0" },
+      "sprite-5-cyan": { "role": "sprite", "displayName": "cyan: Trey (accent-refused)", "canonical": "#3fd9f2" },
+      "sprite-6-green": { "role": "sprite", "displayName": "green", "canonical": "#3ee56d" },
+      "sprite-7-moss": { "role": "sprite", "displayName": "moss", "canonical": "#1d7a45" },
+      "sprite-8-lemon": { "role": "sprite", "displayName": "lemon: reads near gold (accent-refused)", "canonical": "#f2d85a" },
+      "sprite-9-orange": { "role": "sprite", "displayName": "orange", "canonical": "#ff8a2a" },
+      "sprite-a-red": { "role": "sprite", "displayName": "red: warning (accent-refused)", "canonical": "#ff3d32" },
+      "sprite-b-magenta": { "role": "sprite", "displayName": "magenta", "canonical": "#ff5bdc" },
+      "sprite-c-violet": { "role": "sprite", "displayName": "violet (sprite)", "canonical": "#8f5cf0" },
+      "sprite-d-pink": { "role": "sprite", "displayName": "pink", "canonical": "#ff9ec8" },
+      "sprite-e-tan": { "role": "sprite", "displayName": "tan: skin", "canonical": "#e8b089" },
+      "sprite-f-brown": { "role": "sprite", "displayName": "brown: hair, wood", "canonical": "#7c4a2d" }
+    },
+    "typographyMeta": {
+      "display": { "displayName": "Pixel Caps", "purpose": "Overlay titles (scale 1), SIGNED! plate (scale 2 in areas >= 70x7, else 1), attract logo (scale 4 at >= 150x40, 3 at width >= 90, else 2). Glyph 3x5 px, advance 4 px, space 2 px, height padded to even." },
+      "headline": { "displayName": "Bold Caps", "purpose": "Lane names, 1UP block, card title plates, help section heads." },
+      "body": { "displayName": "Body", "purpose": "Message bodies in data; failed bodies gray italic; mentions bold (Trey's underlined)." },
+      "label": { "displayName": "Chip Label", "purpose": "Chips and badges, bold, 1 col padding each side." },
+      "meta": { "displayName": "Meta", "purpose": "Times HH:MM (Trey's local clock), ids, hints, footers; italic for window edges, reply lines, events, tagline." }
+    },
+    "shadows": [],
+    "elevation": "Flat glass. Depth is bezel fills, half-block lips (score bar rule ▀, composer rule ▄, stage floor ▔) and double-framed overlay cards on scanlined glass. pixText supports a shadow option; no shipped surface uses it.",
+    "motion": [
+      { "name": "frame", "value": "125ms (8 fps)", "purpose": "The only drawing timer. Samples on the 125 ms grid, renders only when displayed cells change, runs only while a finite burst is live." },
+      { "name": "power-up", "value": "875ms (7 frames); flash 2 frames then gold", "purpose": "SIGNED! plate on a signed send. Reduced: gold plate, no flash. Off: nothing." },
+      { "name": "hop", "value": "750ms (6 frames); lifted 1 row (2 px) for the first 2 frames", "purpose": "READY! hop when a reader sees Trey's latest send." },
+      { "name": "hop-stagger", "value": "250ms", "purpose": "Spacing between readers seen in one poll." },
+      { "name": "bubble", "value": "1500ms", "purpose": "Generic bubble when an emote payload does not play." },
+      { "name": "attract-burst", "value": "2000ms (16 frames)", "purpose": "Title rows shift one colour per frame; crew hop in turn every 2 frames; PRESS ANY KEY blinks at 2 Hz (lit when frame % 4 < 2); then a still frame." },
+      { "name": "needs-you-flash", "value": "750ms: three on-off flashes, 125 ms phases", "purpose": "Lane needs-you chip blink; under NO_COLOR the underline blinks, not a fill." },
+      { "name": "attract-idle", "value": "600000ms (recheck 60000ms)", "purpose": "Idle time before the attract screen; also shown once at first launch." },
+      { "name": "emote-queue", "value": "4 queued per sender", "purpose": "Emotes wait rather than cut each other off; extras stay in the stream only." },
+      { "name": "motion-modes", "value": "PORCH_MOTION = full | reduced | off", "purpose": "Reduced shows end states; off shows no motion. Any key skips every flourish to its end state." }
+    ],
+    "breakpoints": [
+      { "name": "phone", "value": "< 60 cols (captured at 40)" },
+      { "name": "laptop", "value": "60-139 cols (captured at 100)" },
+      { "name": "wide", "value": ">= 140 cols (captured at 160); split into two panes" }
+    ],
+    "glyphs": {
+      "pixels": { "▀": "upper half block: top pixel fg, bottom pixel bg (equal colours included)", "▄": "lower half block: bottom pixel only", "never": "█ is never emitted" },
+      "frames": {
+        "double": "╔╗╚╝═║ overlay cards, help fallback, power-up plate",
+        "heavy": "┏┓┗┛━┃ failed-signature record (red, bold)",
+        "dotted": "┌┐└┘┈┊ unverified record (gray)",
+        "single": "┌┐└┘─│ mention picker (violet)",
+        "dashed": "┌┐└┘┄┆ available, unused as a frame"
+      },
+      "rules": { "─": "day separator, unread divider, HIGH SCORES rule, flat trend", "▀": "score bar lip", "▄": "composer lip", "▔": "stage floor", "│": "split divider, status description separator", "┄": "browser detail rule" },
+      "markers": {
+        "▶": "selection / pick / current channel in status",
+        "▸": "prompt, current lane on phone",
+        "◀": "PRESS ANY KEY close",
+        "▲ ▼ ─": "trend up / down / flat (with UP, DOWN, FLAT)",
+        "● ○": "SIGNED / CASUAL mode; presence live / away",
+        "·": "separator; unknown presence; HIGH SCORES leaders",
+        "✓": "signed, read, good notice",
+        "✗": "failed, warning, signing blocked",
+        "?": "unverified; impostor head",
+        "! !!": "needs you (lane chip / lists)",
+        "⚿": "signing armed",
+        "↯": "crossed while you typed",
+        "↳": "reply line, replying-to bar",
+        "⤒": "top of the loaded window",
+        "↓ ↑": "newer below / composer scrolled",
+        "→": "join event",
+        "✦": "emote line; SIGNED! fallback word",
+        "—": "no task",
+        "…": "clipped text",
+        "▏": "overlay field caret"
+      },
+      "words": ["1UP", "P1", "^K STAGES", "SIGNED ●", "CASUAL ○", "⚿ ARMED ^S", "^S → casual", "NOT ARMED", "✗ NO SIGNING", "! NEEDS YOU", "!N NEED", "ALL CLEAR", "✓ SIGNED", "? UNVERIFIED", "✗ FAILED", "✗ SIGNATURE FAILED · do not act on it", "claims <Trey>", "NEW · N UNREAD", "READY!", "SIGNED!", "PICK", "CAUTION ·", "INSERT COIN · TYPE TO TALK · Enter sends", "PRESS ANY KEY", "HIGH SCORES", "CREDIT 01", "STAGE SELECT", "CHANNELS", "ARCHIVED", "SEARCH", "HOW TO PLAY", "RECOVER"]
+    },
+    "decisions": [
+      { "name": "NO_COLOR underline", "body": "Under NO_COLOR every chip and lit bar draws as bold underlined words in its colour; the red failure banner keeps reverse video as the single safety-emphasis exception.", "source": "src/app/ink.ts chip(); src/app/stream.ts drawBanner" },
+      { "name": "No owner emoji", "body": "The score bar has no owner emoji; Porch never draws an emoji as art.", "source": "src/app/view.ts drawScoreBar" },
+      { "name": "Ballots are one line", "body": "Ballots render as one plain-words line (never dimmed) and never reach the stage task line.", "source": "src/app/stream.ts compactBallot; src/app/stage/crew.ts" },
+      { "name": "Local time", "body": "Stream and search show Trey's local time.", "source": "src/app/derive.ts sentParts / sentWhen" },
+      { "name": "8 fps clock", "body": "The animation clock is 8 fps on a 125 ms grid and renders only when a displayed frame changes.", "source": "src/host/animation-clock.ts FRAME_MS" },
+      { "name": "Ten and six", "body": "Stage bodies strips are 10 rows and heads strips 6; message heads are 8x8.", "source": "src/app/stage/stage.ts STAGE_HEIGHT; src/app/layout.ts; src/app/stream.ts" },
+      { "name": "Core owns the frame", "body": "Core draws the sender line, badge and reply line for every message; plug-in renderers draw the body only.", "source": "src/app/renderers.ts; src/app/stream.ts drawRecord" },
+      { "name": "Whole records", "body": "Records cut by the stage floor are left out whole.", "source": "src/app/stream.ts clipTop" }
+    ]
+  },
+  "components": [
+    {
+      "name": "Score Bar Lane",
+      "kind": "nav",
+      "refersTo": "lane-current",
+      "description": "A two-row lane: name, unread count and trend; current lane lit cyan; needs-you chip in red.",
+      "html": "<div class=\"ds-lanes\"><div class=\"ds-lane ds-lane-cur\"><b>1 COMMONS</b><br><b>004 ▼</b> DOWN <span class=\"ds-chip-red\"> ! </span></div><div class=\"ds-lane\"><b>2 OPS</b><br><b>001 <span class=\"ds-up\">▲</span></b> <span class=\"ds-up\">UP</span></div></div>",
+      "css": ".ds-lanes{display:flex;gap:9px;background:#05080b;font:15px/18px ui-monospace,Menlo,monospace;border-bottom:9px solid #1d2227} .ds-lane{background:#1d2227;color:#dfe6ea;padding:0 9px;min-width:126px;white-space:pre} .ds-lane-cur{background:#3fd9f2;color:#05080b} .ds-lane:hover{background:#2b3238} .ds-lane-cur:hover{background:#3fd9f2} .ds-up{color:#3ee56d} .ds-chip-red{background:#ff3d32;color:#05080b;font-weight:700}"
+    },
+    {
+      "name": "Verdict Chips",
+      "kind": "chip",
+      "refersTo": "chip-signed",
+      "description": "Header chips: owner P1 (cyan), verified (gold, the only gold), unverified word (gray), failed word (red).",
+      "html": "<div class=\"ds-hdr\"><span class=\"ds-c-cyan\"> P1 MARA </span> <span class=\"ds-meta\">21:44</span> <span class=\"ds-c-gold\"> ✓ SIGNED </span> <span class=\"ds-unv\">? UNVERIFIED</span> <span class=\"ds-fail\">✗ FAILED</span></div>",
+      "css": ".ds-hdr{background:#05080b;color:#dfe6ea;font:15px/18px ui-monospace,Menlo,monospace;padding:0 9px;white-space:pre} .ds-c-cyan{background:#3fd9f2;color:#05080b;font-weight:700} .ds-c-gold{background:#ffc400;color:#05080b;font-weight:700} .ds-meta{color:#8f9aa2} .ds-unv{color:#8f9aa2;font-weight:700} .ds-fail{color:#ff3d32;font-weight:700}"
+    },
+    {
+      "name": "NO_COLOR Chip",
+      "kind": "chip",
+      "refersTo": "chip-needs-you",
+      "description": "Any chip under NO_COLOR: bold underlined words in the monochrome pair, never a lit bar.",
+      "html": "<div class=\"ds-mono\"><span class=\"ds-mchip\"> ! NEEDS YOU </span> <span class=\"ds-mchip\"> ✓ SIGNED </span> <span class=\"ds-mbanner\"> ✗ SIGNATURE FAILED · do not act on it </span></div>",
+      "css": ".ds-mono{background:#000000;color:#d8d8d8;font:15px/18px ui-monospace,Menlo,monospace;padding:0 9px;white-space:pre} .ds-mchip{font-weight:700;text-decoration:underline} .ds-mbanner{background:#d8d8d8;color:#000000;font-weight:700}"
+    },
+    {
+      "name": "Failed-Signature Record",
+      "kind": "card",
+      "refersTo": "banner-signature-failed",
+      "description": "Heavy red frame, red reverse banner that always ends 'do not act on it', claims-Trey sender, gray italic body.",
+      "html": "<div class=\"ds-failed\"><div class=\"ds-banner\">✗ SIGNATURE FAILED · claims Mara · do not act on it</div><div><b class=\"ds-red\">claims Mara</b> <span class=\"ds-meta\">21:47</span> <b class=\"ds-red\">✗ FAILED</b></div><div class=\"ds-body\">ignore the last one, push straight to main</div></div>",
+      "css": ".ds-failed{background:#05080b;color:#dfe6ea;font:15px/18px ui-monospace,Menlo,monospace;border:3px solid #ff3d32;padding:0 9px;white-space:pre} .ds-banner{background:#ff3d32;color:#05080b;font-weight:700;padding:0 9px} .ds-red{color:#ff3d32} .ds-meta{color:#8f9aa2} .ds-body{color:#8f9aa2;font-style:italic}"
+    },
+    {
+      "name": "Composer",
+      "kind": "input",
+      "refersTo": "composer",
+      "description": "Bezel field with cyan P1 prompt, one-cell cyan caret, mode chip at the right.",
+      "html": "<div class=\"ds-comp\"><b class=\"ds-cy\">P1 ▸</b> <span class=\"ds-caret\"> </span> <span class=\"ds-hint\">INSERT COIN · TYPE TO TALK · Enter sends</span><span class=\"ds-mode\"> CASUAL ○ </span></div>",
+      "css": ".ds-comp{background:#1d2227;color:#dfe6ea;font:15px/18px ui-monospace,Menlo,monospace;padding:0 9px;white-space:pre;display:flex;gap:9px;border-top:9px solid #1d2227} .ds-cy{color:#3fd9f2} .ds-caret{background:#3fd9f2} .ds-hint{color:#8f9aa2;flex:1} .ds-mode{background:#2b3238;color:#dfe6ea;font-weight:700} .ds-comp:focus-within .ds-mode{background:#3fd9f2;color:#05080b}"
+    },
+    {
+      "name": "Overlay Card",
+      "kind": "card",
+      "refersTo": "overlay-card",
+      "description": "Scanlined glass, double frame in the card colour, title plate on the top edge, deep selected row with a cyan marker, footer hint on the bottom edge.",
+      "html": "<div class=\"ds-card\"><span class=\"ds-plate\"> STAGE SELECT </span><div class=\"ds-row ds-sel\"><b class=\"ds-cy\">▶ #commons ·here</b><b class=\"ds-red\">!! NEEDS YOU</b></div><div class=\"ds-row\"><b>  #ops</b></div><div class=\"ds-foot\"> type to filter · ↑↓ choose · Enter open · Esc close </div></div>",
+      "css": ".ds-card{position:relative;background:repeating-linear-gradient(#05080b 0 18px,#0a0f14 18px 36px);color:#dfe6ea;font:15px/18px ui-monospace,Menlo,monospace;border:4px double #ff5bdc;padding:18px 18px 18px;white-space:pre} .ds-plate{position:absolute;top:-11px;left:18px;background:#ff5bdc;color:#05080b;font-weight:700} .ds-row{display:flex;justify-content:space-between} .ds-row:hover{background:#14184a} .ds-sel{background:#14184a} .ds-cy{color:#3fd9f2} .ds-red{color:#ff3d32} .ds-foot{color:#8f9aa2}"
+    },
+    {
+      "name": "Stage Member",
+      "kind": "custom",
+      "refersTo": "stage-strip-bodies",
+      "description": "A 16x16 half-block body over a bold accent name tag and a magenta task line; READY! in green during a hop.",
+      "html": "<div class=\"ds-stage\"><div class=\"ds-sprite\"></div><b class=\"ds-name\">Bolt ✓</b><div class=\"ds-task\">on it — drafting the not…</div></div>",
+      "css": ".ds-stage{background:#05080b;font:15px/18px ui-monospace,Menlo,monospace;width:162px;padding:0 9px;white-space:pre} .ds-sprite{width:144px;height:144px;background:#ff8a2a} .ds-name{color:#ff8a2a} .ds-task{color:#ff5bdc} .ds-stage:hover .ds-sprite{transform:translateY(-18px)} .ds-stage:hover .ds-task{color:#3ee56d}"
+    },
+    {
+      "name": "Power-Up Plate",
+      "kind": "custom",
+      "refersTo": "power-up-plate",
+      "description": "SIGNED! in pixel caps, gold in a double frame on glass; two flash frames at the start of an 875 ms burst.",
+      "html": "<div class=\"ds-plate-wrap\"><div class=\"ds-powerup\">SIGNED!</div></div>",
+      "css": ".ds-plate-wrap{background:#05080b;padding:18px} .ds-powerup{display:inline-block;border:4px double #ffc400;color:#ffc400;background:#05080b;font:700 36px/36px ui-monospace,Menlo,monospace;padding:9px 27px;letter-spacing:9px;animation:ds-flash 875ms steps(1) 1} @keyframes ds-flash{0%{color:#fff6d8;border-color:#fff6d8}28.6%{color:#ffc400;border-color:#ffc400}}"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Lit Cabinet",
+    "overview": "Porch is an arcade cabinet switched on in a dark room. The ground is near-black glass with a scanline on every odd row. The crew stand on a stage as pixel characters, and the conversation runs underneath in plain mixed-case text. Every surface is drawn in terminal cells. All art is drawn in half blocks, which pack two full-colour pixels into each cell. Box-drawing frames, block-element rules and bold words do the work that borders, shadows and buttons do elsewhere. Colour follows a state law inherited from Loom, and the law never relaxes: cyan is Trey and only Trey, green is engaged or ready, magenta is where an agent is headed, red is warning, power gold means signed and verified and nothing else, and caution is a word and a dotted frame, never amber. Nothing moves unless a finite burst is running.",
+    "keyCharacteristics": [
+      "Glass ground (glass) with odd-row scanlines (scan). Chrome sits on raised bezel bars.",
+      "Half-block pixel art for every sprite, head, title and plate. █ is never emitted.",
+      "A 3x5 pixel-caps display font for titles and big moments. Everything else is one terminal monospace.",
+      "A strict colour law (cyan, green, magenta, red, gold) with a word or glyph on every state.",
+      "Bursts on a 125 ms grid. Idle draws nothing.",
+      "Phone (40 cols), laptop (100 cols) and wide (160 cols) are all first-class."
+    ],
+    "rules": [
+      { "name": "The One Meaning Rule", "body": "Each signal colour means one thing everywhere: cyan is Trey, green is ready, magenta is headed, red is warning, gold is verified.", "section": "colors" },
+      { "name": "The Gold Is Earned Rule", "body": "Gold appears only for a signed send that verified: the ✓ SIGNED chip and the SIGNED! plate.", "section": "colors" },
+      { "name": "The Caution Is A Word Rule", "body": "Caution is CAUTION · on bezel-hi, or ? UNVERIFIED in a dotted frame. There is no amber.", "section": "colors" },
+      { "name": "The Word Behind Every Colour Rule", "body": "Every state has a word or glyph, so NO_COLOR keeps every meaning.", "section": "colors" },
+      { "name": "The NO_COLOR Underline Rule", "body": "Under NO_COLOR every chip and lit bar draws as bold underlined words in its colour; the red ✗ SIGNATURE FAILED banner is the single reverse-video exception.", "section": "colors" },
+      { "name": "The One Size Rule", "body": "All text is one cell tall. Big type is always the pixel font.", "section": "typography" },
+      { "name": "The Plain Words Rule", "body": "Message bodies are normal mixed-case text, never the pixel font, never upper-cased.", "section": "typography" },
+      { "name": "The Whole Record Rule", "body": "The stage floor cuts the stream only at a message boundary; a record whose first row would sit above it is left out whole.", "section": "layout" },
+      { "name": "The Ten-and-Six Rule", "body": "Stage strips are 10 rows for bodies and 6 for heads; message heads are 8x8 pixels.", "section": "layout" },
+      { "name": "The Phone Is Real Rule", "body": "Every surface works at 40 cols.", "section": "layout" },
+      { "name": "The Flat Glass Rule", "body": "Raise a surface with bezel fills and half-block lips, or frame it with box drawing. Never fake a shadow.", "section": "elevation" },
+      { "name": "The No Emoji Rule", "body": "The score bar draws no owner emoji; Porch never draws an emoji as art.", "section": "components" },
+      { "name": "The Machinery Off Stage Rule", "body": "Polls and ballots never reach the stage task line.", "section": "components" },
+      { "name": "The Body-Only Plug-in Rule", "body": "Core draws head, sender line, badge and reply line; plug-in renderers draw the body only.", "section": "components" },
+      { "name": "The One Line Ballot Rule", "body": "An unframed ballot is one undimmed line of plain words: <Name> voted A on p1. A framed ballot (unverified or failed) uses the same words, in gray and never dimmed, as its body.", "section": "components" }
+    ],
+    "dos": [
+      "Do route every new chip or lit bar through chip() so NO_COLOR draws it as bold underlined words.",
+      "Do give every state a word or glyph alongside its colour.",
+      "Do draw art as half blocks from the sprite palette, and redraw it as line work or dither under NO_COLOR.",
+      "Do keep message bodies in plain mixed-case data text. Put arcade voice in chrome, titles and moments.",
+      "Do make every animation a finite burst on the 125 ms grid, with a reduced-motion end state.",
+      "Do keep the 10-col gutter and the 8x8 head at every width, phone included.",
+      "Do cut the stream at record boundaries only."
+    ],
+    "donts": [
+      "Don't use gold for anything but a verified signature and its SIGNED! plate.",
+      "Don't use cyan for anyone but Trey, or let an agent accent resolve to cyan, lemon or red.",
+      "Don't use amber for caution. Use the word and the dotted frame.",
+      "Don't draw a solid white or light block: no █, and no lit bar under NO_COLOR except the failure banner.",
+      "Don't give the reverse-video exception to any state other than ✗ SIGNATURE FAILED.",
+      "Don't draw an emoji as art (no owner emoji in the score bar), or show a raw ballot.",
+      "Don't let a plug-in renderer draw a head, header, badge or reply line.",
+      "Don't run a timer that draws when nothing is moving.",
+      "Don't use gray-dim for text that must be read. It is for rules, leaders, the no-task dash and the away/unknown presence glyph beside its word."
+    ]
+  }
+}

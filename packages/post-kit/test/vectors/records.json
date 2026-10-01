@@ -1,0 +1,230 @@
+[
+  {
+    "name": "raw-controls-crlf-trailing-space",
+    "expected": "verified",
+    "record": {
+      "id": "20260930-230000-000001-abcdef",
+      "from": "mara",
+      "channel": "commons",
+      "sent": "2026-09-30 23:00:00 +0000",
+      "body": "  first\r\n\u001b[31mESCC1‮BIDI\t \n🦊🔏 bait [signed:NOT-A-REF]\nlast\t \r\n",
+      "signature_ref": {
+        "version": 2,
+        "tag": "20260930T230000Z"
+      },
+      "future_field": {
+        "kept": true
+      }
+    }
+  },
+  {
+    "name": "signed-v1",
+    "expected": "verified",
+    "record": {
+      "id": "20260930-230000-000001-abcdef",
+      "from": "mara",
+      "channel": "commons",
+      "sent": "2026-09-30 23:00:00 +0000",
+      "body": "🦊🔏 hello golden [signed:20260930T230001Z]",
+      "future_field": {
+        "kept": true
+      }
+    }
+  },
+  {
+    "name": "locator-null",
+    "expected": "failed",
+    "record": {
+      "id": "20260930-230000-000001-abcdef",
+      "from": "mara",
+      "channel": "commons",
+      "sent": "2026-09-30 23:00:00 +0000",
+      "body": "  first\r\n\u001b[31mESCC1‮BIDI\t \n🦊🔏 bait [signed:NOT-A-REF]\nlast\t \r\n",
+      "signature_ref": null,
+      "future_field": {
+        "kept": true
+      }
+    }
+  },
+  {
+    "name": "missing-tag",
+    "expected": "failed",
+    "record": {
+      "id": "20260930-230000-000001-abcdef",
+      "from": "mara",
+      "channel": "commons",
+      "sent": "2026-09-30 23:00:00 +0000",
+      "body": "  first\r\n\u001b[31mESCC1‮BIDI\t \n🦊🔏 bait [signed:NOT-A-REF]\nlast\t \r\n",
+      "signature_ref": {
+        "version": 2
+      },
+      "future_field": {
+        "kept": true
+      }
+    }
+  },
+  {
+    "name": "tag-grammar",
+    "expected": "failed",
+    "record": {
+      "id": "20260930-230000-000001-abcdef",
+      "from": "mara",
+      "channel": "commons",
+      "sent": "2026-09-30 23:00:00 +0000",
+      "body": "  first\r\n\u001b[31mESCC1‮BIDI\t \n🦊🔏 bait [signed:NOT-A-REF]\nlast\t \r\n",
+      "signature_ref": {
+        "version": 2,
+        "tag": "bad/tag"
+      },
+      "future_field": {
+        "kept": true
+      }
+    }
+  },
+  {
+    "name": "version-three",
+    "expected": "failed",
+    "record": {
+      "id": "20260930-230000-000001-abcdef",
+      "from": "mara",
+      "channel": "commons",
+      "sent": "2026-09-30 23:00:00 +0000",
+      "body": "  first\r\n\u001b[31mESCC1‮BIDI\t \n🦊🔏 bait [signed:NOT-A-REF]\nlast\t \r\n",
+      "signature_ref": {
+        "version": 3,
+        "tag": "20260930T230000Z"
+      },
+      "future_field": {
+        "kept": true
+      }
+    }
+  },
+  {
+    "name": "boolean-version",
+    "expected": "failed",
+    "record": {
+      "id": "20260930-230000-000001-abcdef",
+      "from": "mara",
+      "channel": "commons",
+      "sent": "2026-09-30 23:00:00 +0000",
+      "body": "  first\r\n\u001b[31mESCC1‮BIDI\t \n🦊🔏 bait [signed:NOT-A-REF]\nlast\t \r\n",
+      "signature_ref": {
+        "version": true,
+        "tag": "20260930T230000Z"
+      },
+      "future_field": {
+        "kept": true
+      }
+    }
+  },
+  {
+    "name": "extra-locator-key",
+    "expected": "failed",
+    "record": {
+      "id": "20260930-230000-000001-abcdef",
+      "from": "mara",
+      "channel": "commons",
+      "sent": "2026-09-30 23:00:00 +0000",
+      "body": "  first\r\n\u001b[31mESCC1‮BIDI\t \n🦊🔏 bait [signed:NOT-A-REF]\nlast\t \r\n",
+      "signature_ref": {
+        "version": 2,
+        "tag": "20260930T230000Z",
+        "extra": 1
+      },
+      "future_field": {
+        "kept": true
+      }
+    }
+  },
+  {
+    "name": "envelope-channel-mismatch",
+    "expected": "failed",
+    "record": {
+      "id": "20260930-230000-000001-abcdef",
+      "from": "mara",
+      "channel": "elsewhere",
+      "sent": "2026-09-30 23:00:00 +0000",
+      "body": "  first\r\n\u001b[31mESCC1‮BIDI\t \n🦊🔏 bait [signed:NOT-A-REF]\nlast\t \r\n",
+      "signature_ref": {
+        "version": 2,
+        "tag": "20260930T230000Z"
+      },
+      "future_field": {
+        "kept": true
+      }
+    }
+  },
+  {
+    "name": "manifest-channel-mismatch",
+    "expected": "failed",
+    "record": {
+      "id": "20260930-230000-000001-abcdef",
+      "from": "mara",
+      "channel": "commons",
+      "sent": "2026-09-30 23:00:00 +0000",
+      "body": "  first\r\n\u001b[31mESCC1‮BIDI\t \n🦊🔏 bait [signed:NOT-A-REF]\nlast\t \r\n",
+      "signature_ref": {
+        "version": 2,
+        "tag": "20260930T230002Z"
+      },
+      "future_field": {
+        "kept": true
+      }
+    }
+  },
+  {
+    "name": "incomplete-body",
+    "expected": "unknown",
+    "record": {
+      "id": "20260930-230000-000001-abcdef",
+      "from": "mara",
+      "channel": "commons",
+      "sent": "2026-09-30 23:00:00 +0000",
+      "body": "  first\r\n\u001b[31mESCC1‮BIDI\t \n🦊🔏 bait [signed:NOT-A-REF]\nlast\t \r\n",
+      "signature_ref": {
+        "version": 2,
+        "tag": "20260930T230000Z"
+      },
+      "future_field": {
+        "kept": true
+      },
+      "body_complete": false
+    }
+  },
+  {
+    "name": "body-mutated",
+    "expected": "failed",
+    "record": {
+      "id": "20260930-230000-000001-abcdef",
+      "from": "mara",
+      "channel": "commons",
+      "sent": "2026-09-30 23:00:00 +0000",
+      "body": "  first\r\n\u001b[31mESCC1‮BIDI\t \n🦊🔏 bait [signed:NOT-A-REF]\nlast\t \r\n!",
+      "signature_ref": {
+        "version": 2,
+        "tag": "20260930T230000Z"
+      },
+      "future_field": {
+        "kept": true
+      }
+    }
+  },
+  {
+    "name": "non-owner",
+    "expected": "failed",
+    "record": {
+      "id": "20260930-230000-000001-abcdef",
+      "from": "agent",
+      "channel": "commons",
+      "sent": "2026-09-30 23:00:00 +0000",
+      "body": "  first\r\n\u001b[31mESCC1‮BIDI\t \n🦊🔏 bait [signed:NOT-A-REF]\nlast\t \r\n",
+      "signature_ref": {
+        "version": 2,
+        "tag": "20260930T230000Z"
+      },
+      "future_field": {
+        "kept": true
+      }
+    }
+  }
+]

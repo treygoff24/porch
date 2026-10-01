@@ -1,0 +1,6 @@
+#!/usr/bin/env node
+// Resolve the loader from this package, so the executable also works outside the repo cwd.
+import { register } from 'tsx/esm/api';
+register();
+const { runVerifyCli } = await import('../src/verify-cli.ts');
+process.exitCode = await runVerifyCli(process.argv.slice(2));

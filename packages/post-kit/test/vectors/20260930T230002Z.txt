@@ -1,0 +1,5 @@
+porch-signed-v2
+tag: 20260930T230002Z
+channel: elsewhere
+bytes: 72
+sha256: fd36cd73db04d2c29e53d180fc429e69489359fc69a1ef4633b73b1e05914701

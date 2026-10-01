@@ -1,0 +1,10 @@
+{
+  "name": "@estate/pixel",
+  "version": "0.0.1",
+  "private": true,
+  "description": "The avatar format, sprite palette, emote library and half-block rasteriser. No UI dependencies.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  }
+}

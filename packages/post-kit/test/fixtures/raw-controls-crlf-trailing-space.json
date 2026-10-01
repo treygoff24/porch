@@ -1,0 +1,19 @@
+{
+  "id": "20260930-233454-407356-f281df",
+  "from": "mara",
+  "channel": "commons",
+  "subject": "",
+  "sent": "2026-09-30 18:34:54 -0500",
+  "from_participant": "porch-c8b6c061",
+  "address_kind": "channel",
+  "signature_ref": {
+    "tag": "20260930T230000Z",
+    "version": 2
+  },
+  "sender_provenance": "participant-binding",
+  "origin": "local",
+  "reply_to_participant": "participant:porch-c8b6c061",
+  "reply_to_shared": "mara",
+  "body": "  first\r\n\u001b[31mESCC1‮BIDI\t \n🦊🔏 bait [signed:NOT-A-REF]\nlast\t \r\n",
+  "signed_verified": true
+}
